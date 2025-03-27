@@ -1,0 +1,1 @@
+{"root":["./src/config.ts","./src/get.ts","./src/index.ts","./src/types.d.ts","./src/commands/get.ts","./src/commands/init.ts","./src/commands/list.ts","./src/commands/reindex.ts","./src/commands/switch.ts","./src/utils/files.ts","./src/utils/indexer.ts"],"version":"5.8.2"}
