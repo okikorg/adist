@@ -1,12 +1,14 @@
 import pc from 'picocolors';
 import { Command } from 'commander';
 import config from '../config.js';
+import Table from 'cli-table3';
 
 export const summaryCommand = new Command('summary')
   .description('View file and project summaries')
   .argument('[projectName]', 'Optional project name to view summaries for')
   .option('-f, --file <filePath>', 'View summary for a specific file')
-  .action(async (projectNameArg: string | undefined, options: { file?: string }) => {
+  .option('-l, --list', 'List all files with their summaries in a table')
+  .action(async (projectNameArg: string | undefined, options: { file?: string; list?: boolean }) => {
     try {
       const projects = await config.get('projects') as Record<string, unknown> | undefined;
       if (!projects || typeof projects !== 'object') {
@@ -69,6 +71,41 @@ export const summaryCommand = new Command('summary')
         process.exit(1);
       }
 
+      if (options.list) {
+        // Get all indexes with summaries
+        const indexes = await config.get(`indexes.${targetProjectId}`) as Array<{ path: string; summary?: string }> | undefined;
+        if (!indexes) {
+          console.error(pc.bold(pc.red('✘ Project has not been indexed.')));
+          process.exit(1);
+        }
+
+        // Create table
+        const table = new Table({
+          head: ['File', 'Summary'],
+          style: {
+            head: ['cyan', 'bold'],
+            border: ['gray'],
+          },
+          colWidths: [40, 80],
+        });
+
+        // Add rows to table
+        indexes.forEach(index => {
+          if (index.summary) {
+            // Truncate summary to fit in table
+            const truncatedSummary = index.summary.length > 77 
+              ? index.summary.slice(0, 74) + '...' 
+              : index.summary;
+            table.push([index.path, truncatedSummary]);
+          }
+        });
+
+        console.log(pc.bold(pc.cyan(`\nFile Summaries for ${projectName}:`)));
+        console.log(table.toString());
+        console.log(pc.dim('\nUse "adist summary --file <filePath>" to view full summary for a specific file.'));
+        process.exit(0);
+      }
+
       if (options.file) {
         // View specific file summary
         const indexes = await config.get(`indexes.${targetProjectId}`) as Array<{ path: string; summary?: string }> | undefined;
@@ -101,6 +138,7 @@ export const summaryCommand = new Command('summary')
 
         console.log(pc.bold(pc.cyan(`Project Summary: ${projectName}`)));
         console.log(overallSummary);
+        console.log(pc.dim('\nUse "adist summary --list" to view summaries for all files.'));
         process.exit(0);
       }
     } catch (error) {
