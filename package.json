@@ -1,6 +1,6 @@
 {
   "name": "adist",
-  "version": "1.0.15",
+  "version": "1.0.16",
   "description": "A project indexing and distribution management tool for LLMs",
   "type": "module",
   "main": "dist/index.js",
