@@ -1,7 +1,9 @@
 import pc from 'picocolors';
 import { Command } from 'commander';
 import config from '../config.js';
-import Table from 'cli-table3';
+import prompts, { Choice } from 'prompts';
+import pkg from 'lodash';
+const { truncate } = pkg;
 
 export const summaryCommand = new Command('summary')
   .description('View file and project summaries')
@@ -79,31 +81,81 @@ export const summaryCommand = new Command('summary')
           process.exit(1);
         }
 
-        // Create table
-        const table = new Table({
-          head: ['File', 'Summary'],
-          style: {
-            head: ['cyan', 'bold'],
-            border: ['gray'],
-          },
-          colWidths: [40, 80],
-        });
+        // Filter out files without summaries
+        const filesWithSummaries = indexes.filter(index => index.summary);
+        
+        if (filesWithSummaries.length === 0) {
+          console.error(pc.bold(pc.yellow('⚠️ No files with summaries found in this project.')));
+          process.exit(1);
+        }
 
-        // Add rows to table
-        indexes.forEach(index => {
-          if (index.summary) {
-            // Truncate summary to fit in table
-            const truncatedSummary = index.summary.length > 77 
-              ? index.summary.slice(0, 74) + '...' 
-              : index.summary;
-            table.push([index.path, truncatedSummary]);
-          }
-        });
+        // Create choices for the interactive prompt
+        const choices = filesWithSummaries.map(index => ({
+          title: index.path,
+          description: truncate(index.summary, { length: 100 }),
+          value: index.path,
+          summary: index.summary
+        }));
 
         console.log(pc.bold(pc.cyan(`\nFile Summaries for ${projectName}:`)));
-        console.log(table.toString());
-        console.log(pc.dim('\nUse "adist summary --file <filePath>" to view full summary for a specific file.'));
-        process.exit(0);
+        console.log(pc.dim('Navigation: Arrow keys to move, Enter to select'));
+        console.log(pc.dim('Search: Type to filter files'));
+        console.log(pc.dim('Exit: Press Esc, Ctrl+C, or q to quit\n'));
+
+        try {
+          while (true) {
+            const response = await prompts({
+              type: 'select',
+              name: 'file',
+              message: 'Select a file to view its summary:',
+              choices: choices,
+              hint: 'Type to search',
+              warn: 'No matches found',
+              onState: (state) => {
+                if (state.aborted) {
+                  process.exit(0); // Exit on Esc/Ctrl+C
+                }
+              }
+            }, {
+              onCancel: () => {
+                process.exit(0);
+              }
+            });
+
+            // Exit if no file selected (user pressed Esc/Ctrl+C)
+            if (!response.file) {
+              process.exit(0);
+            }
+
+            const selectedFile = filesWithSummaries.find(index => index.path === response.file);
+            if (selectedFile) {
+              console.clear();
+              console.log(pc.bold(pc.cyan(`\nSummary for ${selectedFile.path}:`)));
+              console.log(selectedFile.summary);
+              console.log(pc.dim('\nPress Enter to continue, Esc/q to exit...'));
+              
+              const continueResponse = await prompts({
+                type: 'text',
+                name: 'action',
+                message: '',
+                validate: value => true
+              }, {
+                onCancel: () => {
+                  process.exit(0);
+                }
+              });
+
+              if (continueResponse.action === 'q') {
+                process.exit(0);
+              }
+
+              console.clear();
+            }
+          }
+        } catch (error) {
+          // Handle any interrupts or errors gracefully
+          process.exit(0);
+        }
       }
 
       if (options.file) {
