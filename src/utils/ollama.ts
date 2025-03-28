@@ -1,5 +1,6 @@
 import pc from 'picocolors';
 import fetch from 'node-fetch';
+import config from '../config.js';
 
 interface SummaryResult {
   summary: string;
@@ -584,12 +585,36 @@ ANSWER:`;
           // Generate new context with appropriate complexity
           const queryComplexity = this.estimateQueryComplexity(latestQuery);
           contextContent = this.optimizeContextContent(context, queryComplexity, followUp);
+          
+          // Get the project summary if available
+          const overallSummary = await config.get(`summaries.${projectId}.overall`) as string | undefined;
+          
+          // If no search results were found or they're minimal, add the project summary
+          if ((context.length === 0 || contextContent.length < 1000) && overallSummary) {
+            const projectSummaryContext = `PROJECT OVERVIEW:\n${overallSummary}\n\n`;
+            
+            // Add the project summary to the beginning of the context
+            contextContent = projectSummaryContext + contextContent;
+          }
+          
           this.updateCache(projectId, topicId, contextContent, context);
         }
       } else {
         // Generate new context for new topics
         const queryComplexity = this.estimateQueryComplexity(latestQuery);
         contextContent = this.optimizeContextContent(context, queryComplexity);
+        
+        // Get the project summary if available
+        const overallSummary = await config.get(`summaries.${projectId}.overall`) as string | undefined;
+        
+        // If no search results were found or they're minimal, add the project summary
+        if ((context.length === 0 || contextContent.length < 1000) && overallSummary) {
+          const projectSummaryContext = `PROJECT OVERVIEW:\n${overallSummary}\n\n`;
+          
+          // Add the project summary to the beginning of the context
+          contextContent = projectSummaryContext + contextContent;
+        }
+        
         this.updateCache(projectId, topicId, contextContent, context);
       }
 

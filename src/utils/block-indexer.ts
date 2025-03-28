@@ -254,6 +254,14 @@ export class BlockSearchEngine {
     
     const results: SearchResult[] = [];
 
+    // Check if this is a query asking for summaries
+    const isSummaryQuery = 
+      normalizedQuery.includes('summary') || 
+      normalizedQuery.includes('overview') || 
+      normalizedQuery.includes('describe') ||
+      normalizedQuery.includes('what is this') ||
+      normalizedQuery.includes('what does this do');
+
     // Search in each document
     for (const document of documents) {
       // Build a map of blocks by id for fast lookup
@@ -264,7 +272,12 @@ export class BlockSearchEngine {
       
       // Score each block
       const scoredBlocks = document.blocks.map(block => {
-        const score = this.scoreBlock(block, queryTerms);
+        let score = this.scoreBlock(block, queryTerms);
+        
+        // Prioritize document blocks with summaries when asking for summaries
+        if (isSummaryQuery && block.type === 'document' && block.summary) {
+          score += 5; // Boost score for document blocks with summaries
+        }
         
         return { block, score };
       }).filter(({ score }) => score > 0);
@@ -276,6 +289,18 @@ export class BlockSearchEngine {
         // When we find good matches, add contextual blocks too (parent/children)
         const relevantBlocks: DocumentBlock[] = [];
         const addedIds = new Set<string>();
+        
+        // If this is a summary query, always include document block with summary if available
+        if (isSummaryQuery) {
+          const documentBlock = document.blocks.find(block => 
+            block.type === 'document' && block.summary
+          );
+          
+          if (documentBlock) {
+            relevantBlocks.push(documentBlock);
+            addedIds.add(documentBlock.id);
+          }
+        }
         
         // Add top scoring blocks
         scoredBlocks.slice(0, 5).forEach(({ block }) => {

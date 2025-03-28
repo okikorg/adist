@@ -18,7 +18,7 @@ export const queryCommand = new Command('query')
         process.exit(1);
       }
 
-      const projects = await config.get('projects') as Record<string, { path: string; name: string }>;
+      const projects = await config.get('projects') as Record<string, { path: string; name: string; hasSummaries?: boolean }>;
       const project = projects[currentProjectId];
       if (!project) {
         console.error(pc.bold(pc.red('✘ Current project not found.')));
@@ -27,6 +27,38 @@ export const queryCommand = new Command('query')
 
       console.log(`${pc.bold('Project:')} ${pc.cyan(project.name)}`);
       console.log(`${pc.bold('Question:')} ${pc.yellow('"' + question + '"')}`);
+
+      // Check if this is a summary-related query
+      const isSummaryQuery = 
+        question.toLowerCase().includes('summary') || 
+        question.toLowerCase().includes('overview') || 
+        question.toLowerCase().includes('describe') ||
+        question.toLowerCase().includes('what is') ||
+        question.toLowerCase().includes("what's") ||
+        question.toLowerCase().includes('what does') ||
+        question.toLowerCase().includes('explain');
+        
+      // Check for explicit summary requests
+      const isExplicitSummaryRequest = 
+        question.toLowerCase() === 'summary' ||
+        question.toLowerCase() === 'what is the summary' ||
+        question.toLowerCase() === "what's the summary" ||
+        question.toLowerCase() === 'project summary' ||
+        question.toLowerCase() === 'show summary' ||
+        question.toLowerCase() === 'show project summary';
+        
+      // For explicit summary requests, show summary directly if available
+      if (isExplicitSummaryRequest && project.hasSummaries) {
+        const projectSummary = await config.get(`summaries.${currentProjectId}.overall`) as string | undefined;
+        
+        if (projectSummary) {
+          console.log(pc.bold(pc.cyan('Project Summary:')));
+          console.log('\n' + projectSummary + '\n');
+          console.log(pc.dim('To view file summaries:'));
+          console.log(pc.cyan('  adist summary --list'));
+          process.exit(0);
+        }
+      }
 
       // Search for relevant documents using block-based search
       const searchEngine = new BlockSearchEngine();
@@ -47,6 +79,34 @@ export const queryCommand = new Command('query')
           content: content
         };
       });
+      
+      // Check if we have a project summary available
+      let hasSummary = false;
+      let overallSummary: string | undefined;
+      
+      // If it's a summary query or no results were found, check for project summary
+      if ((isSummaryQuery || blockResults.length === 0) && project.hasSummaries) {
+        overallSummary = await config.get(`summaries.${currentProjectId}.overall`) as string | undefined;
+        hasSummary = Boolean(overallSummary);
+        
+        // For summary queries, add the project summary to the results
+        if (isSummaryQuery && hasSummary && overallSummary) {
+          results.push({
+            path: "PROJECT_SUMMARY",
+            content: `--- Project Summary ---\n${overallSummary}`
+          });
+        }
+        
+        // For explicit summary requests, prioritize the summary by making it the only result
+        if (isExplicitSummaryRequest && hasSummary && overallSummary) {
+          // Clear existing results and only use the summary
+          results.length = 0;
+          results.push({
+            path: "PROJECT_SUMMARY",
+            content: `--- Project Summary ---\n${overallSummary}`
+          });
+        }
+      }
       
       console.log(pc.bold(pc.cyan('Debug Info:')));
       console.log(`Found ${blockResults.length} document(s) with ${blockResults.reduce((count, doc) => count + doc.blocks.length, 0)} relevant blocks`);

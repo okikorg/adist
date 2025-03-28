@@ -192,6 +192,47 @@ export const chatCommand = new Command('chat')
           // Add user message to history
           messages.push({ role: 'user', content: userInput });
           
+          // Check if this is a summary-related query
+          const isSummaryQuery = 
+            userInput.toLowerCase().includes('summary') || 
+            userInput.toLowerCase().includes('overview') || 
+            userInput.toLowerCase().includes('describe') ||
+            userInput.toLowerCase().includes('what is') ||
+            userInput.toLowerCase().includes("what's") ||
+            userInput.toLowerCase().includes('what does') ||
+            userInput.toLowerCase().includes('explain');
+            
+          // Check for explicit summary requests
+          const isExplicitSummaryRequest = 
+            userInput.toLowerCase() === 'summary' ||
+            userInput.toLowerCase() === 'what is the summary' ||
+            userInput.toLowerCase() === "what's the summary" ||
+            userInput.toLowerCase() === 'project summary' ||
+            userInput.toLowerCase() === 'show summary' ||
+            userInput.toLowerCase() === 'show project summary';
+          
+          // For explicit summary requests, show summary directly if available
+          if (isExplicitSummaryRequest && project.hasSummaries) {
+            const projectSummary = await config.get(`summaries.${currentProjectId}.overall`) as string | undefined;
+            
+            if (projectSummary) {
+              console.log(pc.bold(pc.cyan('\nAssistant:')));
+              console.log(pc.cyan('Project Summary:'));
+              console.log(projectSummary);
+              console.log(pc.dim('\nTo view file summaries, use:'));
+              console.log(pc.cyan('  adist summary --list'));
+              
+              // Add response to chat history
+              messages.push({ 
+                role: 'assistant', 
+                content: `Project Summary:\n\n${projectSummary}\n\nTo view file summaries, use: adist summary --list` 
+              });
+              
+              // Skip the regular LLM call
+              continue;
+            }
+          }
+          
           // Check if this query might be related to the previous one
           const isRelatedQuery = lastQuery && (
             userInput.toLowerCase().includes(lastQuery.toLowerCase()) ||
@@ -203,7 +244,11 @@ export const chatCommand = new Command('chat')
           const searchEngine = new BlockSearchEngine();
           const blockResults = await searchEngine.searchBlocks(userInput);
           
-          // Format results for the LLM
+          // Check if we have a project summary available
+          let hasSummary = false;
+          let overallSummary: string | undefined;
+          
+          // Format results from block search
           const results = blockResults.map(result => {
             // Combine all block contents for the document
             const content = result.blocks.map(block => {
@@ -218,6 +263,30 @@ export const chatCommand = new Command('chat')
               content: content
             };
           });
+          
+          // If it's a summary query or no results were found, check for project summary
+          if ((isSummaryQuery || blockResults.length === 0) && project.hasSummaries) {
+            overallSummary = await config.get(`summaries.${currentProjectId}.overall`) as string | undefined;
+            hasSummary = Boolean(overallSummary);
+            
+            // For summary queries, add the project summary to the results
+            if (isSummaryQuery && hasSummary && overallSummary) {
+              results.push({
+                path: "PROJECT_SUMMARY",
+                content: `--- Project Summary ---\n${overallSummary}`
+              });
+            }
+            
+            // For explicit summary requests, prioritize the summary by making it the only result
+            if (isExplicitSummaryRequest && hasSummary && overallSummary) {
+              // Clear existing results and only use the summary
+              results.length = 0;
+              results.push({
+                path: "PROJECT_SUMMARY",
+                content: `--- Project Summary ---\n${overallSummary}`
+              });
+            }
+          }
           
           // Debug logging
           if (showDebugInfo) {
@@ -240,11 +309,22 @@ export const chatCommand = new Command('chat')
                 isFile: true;
                 blocks: BlockInfo[];
                 count: number;
+                summary?: string;
               }
               
               interface DirectoryNode extends Map<string, DirectoryNode | FileNode> {}
               
               const projectStructure = new Map<string, DirectoryNode | FileNode>();
+              
+              // Check if we should fetch and include summaries
+              let projectSummaryInfo = '';
+              if (project.hasSummaries && blockResults.length === 0) {
+                const overallSummary = await config.get(`summaries.${currentProjectId}.overall`) as string | undefined;
+                if (overallSummary) {
+                  projectSummaryInfo = pc.cyan('\nUsing project summary as context');
+                }
+              }
+              
               blockResults.forEach(doc => {
                 // Split the document path to get directories and filename
                 const pathParts = doc.document.split('/');
@@ -259,11 +339,20 @@ export const chatCommand = new Command('chat')
                   currentLevel = currentLevel.get(part) as DirectoryNode;
                 });
                 
-                // Add file with block info
+                // Add file with block info and look for summary if available
+                let blockSummary: string | undefined;
+                
+                // Look for document block that might have summary
+                const documentBlock = doc.blocks.find(block => block.type === 'document' && 'summary' in block);
+                if (documentBlock && 'summary' in documentBlock) {
+                  blockSummary = documentBlock.summary as string;
+                }
+                
                 currentLevel.set(fileName, {
                   isFile: true,
                   blocks: doc.blocks,
-                  count: doc.blocks.length
+                  count: doc.blocks.length,
+                  summary: blockSummary
                 });
               });
               
@@ -287,6 +376,14 @@ export const chatCommand = new Command('chat')
                     const fileNode = value as FileNode;
                     const blockInfo = fileNode.count > 0 ? pc.cyan(` (${fileNode.count} blocks)`) : '';
                     console.log(`${prefix}${connector}${pc.bold(key)}${blockInfo}`);
+                    
+                    // Show summary if available
+                    if (fileNode.summary) {
+                      const summaryPreview = fileNode.summary.length > 60 
+                        ? fileNode.summary.substring(0, 60) + '...' 
+                        : fileNode.summary;
+                      console.log(`${prefix}${childPrefix}${pc.dim('Summary:')} ${pc.cyan(summaryPreview)}`);
+                    }
                     
                     // Show block details with prettier formatting
                     if (fileNode.count > 0) {
@@ -313,6 +410,11 @@ export const chatCommand = new Command('chat')
               };
               
               printTree(projectStructure as DirectoryNode);
+              
+              // Display project summary info if available
+              if (projectSummaryInfo) {
+                console.log(projectSummaryInfo);
+              }
             }
           }
           
@@ -322,15 +424,19 @@ export const chatCommand = new Command('chat')
             results, 
             currentProjectId,
             // Stream callback for real-time output
-            (chunk) => {
+            async (chunk) => {
               // Only add the answer header and debug info on the first chunk
               if (!isDisplayingResponse) {
                 console.log(pc.bold(pc.cyan('Assistant:')));
                 
                 if (results.length === 0) {
-                  console.log(pc.yellow('⚠️ No relevant documents found in the project to answer your question.'));
-                  console.log(pc.dim('Try reindexing the project with:'));
-                  console.log(pc.cyan('  adist reindex -s'));
+                  if (hasSummary) {
+                    console.log(pc.cyan('ℹ️ Using project summary as context (no specific code blocks found).'));
+                  } else {
+                    console.log(pc.yellow('⚠️ No relevant documents found in the project to answer your question.'));
+                    console.log(pc.dim('Try reindexing the project with:'));
+                    console.log(pc.cyan('  adist reindex -s'));
+                  }
                 }
                 
                 isDisplayingResponse = true;
@@ -357,9 +463,13 @@ export const chatCommand = new Command('chat')
             console.log(pc.bold(pc.cyan('Assistant:')));
             
             if (results.length === 0) {
-              console.log(pc.yellow('⚠️ No relevant documents found in the project to answer your question.'));
-              console.log(pc.dim('Try reindexing the project with:'));
-              console.log(pc.cyan('  adist reindex -s'));
+              if (hasSummary) {
+                console.log(pc.cyan('ℹ️ Using project summary as context (no specific code blocks found).'));
+              } else {
+                console.log(pc.yellow('⚠️ No relevant documents found in the project to answer your question.'));
+                console.log(pc.dim('Try reindexing the project with:'));
+                console.log(pc.cyan('  adist reindex -s'));
+              }
             }
             
             // Apply syntax highlighting to code blocks in the response

@@ -23,7 +23,84 @@ export const blockGetCommand = new Command('block-get')
       const searchEngine = new BlockSearchEngine();
       const results = await searchEngine.searchBlocks(query);
 
+      // Check if the query is about summaries or descriptions
+      const isSummaryQuery = 
+        query.toLowerCase().includes('summary') || 
+        query.toLowerCase().includes('overview') || 
+        query.toLowerCase().includes('describe') ||
+        query.toLowerCase().includes('what is') ||
+        query.toLowerCase().includes('what does') ||
+        query.toLowerCase().includes('explain');
+
       if (results.length === 0) {
+        // Check if the project has a summary available
+        const currentProjectId = await config.get('currentProject') as string;
+        if (!currentProjectId) {
+          console.log(pc.yellow('No matching blocks found.'));
+          process.exit(0);
+        }
+        
+        const projects = await config.get('projects') as Record<string, { hasSummaries?: boolean }>;
+        const project = projects[currentProjectId];
+        
+        if (project?.hasSummaries) {
+          // Try to get block-based summaries first
+          const blockIndexes = await config.get(`block-indexes.${currentProjectId}`) as any[] | undefined;
+          
+          if (blockIndexes && Array.isArray(blockIndexes) && blockIndexes.length > 0 && isSummaryQuery) {
+            // Extract files with summaries
+            const filesWithSummaries = blockIndexes
+              .map(doc => {
+                // Find document block with summary
+                const documentBlock = Array.isArray(doc.blocks) 
+                  ? doc.blocks.find((block: any) => block.type === 'document' && block.summary)
+                  : null;
+                
+                if (documentBlock && documentBlock.summary) {
+                  return {
+                    path: doc.path,
+                    summary: documentBlock.summary
+                  };
+                }
+                return null;
+              })
+              .filter(Boolean);
+            
+            if (filesWithSummaries && filesWithSummaries.length > 0) {
+              console.log(pc.yellow('No specific blocks matching your query were found.'));
+              console.log(pc.cyan('However, file summaries are available:'));
+              console.log();
+              
+              // Show at most 3 file summaries
+              const filesToShow = filesWithSummaries.slice(0, 3);
+              filesToShow.forEach((file: any) => {
+                console.log(pc.bold(pc.cyan(`${file.path}:`)));
+                console.log(file.summary);
+                console.log();
+              });
+              
+              if (filesWithSummaries.length > 3) {
+                console.log(pc.dim(`... and ${filesWithSummaries.length - 3} more files with summaries`));
+              }
+              
+              console.log(pc.dim('To view all file summaries:'));
+              console.log(pc.cyan('  adist summary --list'));
+              process.exit(0);
+            }
+          }
+          
+          const overallSummary = await config.get(`summaries.${currentProjectId}.overall`) as string | undefined;
+          
+          if (overallSummary) {
+            console.log(pc.yellow('No specific code blocks matching your query were found.'));
+            console.log(pc.cyan('However, a project summary is available:'));
+            console.log('\n' + overallSummary + '\n');
+            console.log(pc.dim('For more specific results, try another search query or use:'));
+            console.log(pc.cyan('  adist summary --list'));
+            process.exit(0);
+          }
+        }
+        
         console.log(pc.yellow('No matching blocks found.'));
         process.exit(0);
       }
@@ -34,10 +111,24 @@ export const blockGetCommand = new Command('block-get')
       for (const result of results.slice(0, maxResults)) {
         console.log(pc.bold(pc.blue(`\nFile: ${result.document}`)));
         
+        // Check if there's a document block with a summary
+        const documentBlock = result.blocks.find(block => 
+          block.type === 'document' && 'summary' in block && block.summary
+        );
+        
+        if (documentBlock && 'summary' in documentBlock && documentBlock.summary) {
+          console.log(pc.cyan(`  Summary: ${documentBlock.summary}`));
+        }
+        
         // Sort blocks by line number
         const sortedBlocks = [...result.blocks].sort((a, b) => a.startLine - b.startLine);
         
         for (const block of sortedBlocks) {
+          // Skip document blocks as we already showed the summary
+          if (block.type === 'document' && 'summary' in block) {
+            continue;
+          }
+          
           console.log(pc.yellow(`  Block: ${block.type} (${block.startLine}-${block.endLine})`));
           if (block.title) {
             console.log(pc.bold(`  Title: ${block.title}`));

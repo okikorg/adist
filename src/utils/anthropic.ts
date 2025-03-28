@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import pc from 'picocolors';
+import config from '../config.js';
 
 interface SummaryResult {
   summary: string;
@@ -438,6 +439,17 @@ export class AnthropicService {
       } else {
         // Generate new optimized context content
         contextContent = this.optimizeContextContent(context, queryComplexity);
+        
+        // Get the project summary if available
+        const overallSummary = await config.get(`summaries.${projectId}.overall`) as string | undefined;
+        
+        // If no search results were found or they're minimal, add the project summary
+        if ((context.length === 0 || contextContent.length < 1000) && overallSummary) {
+          const projectSummaryContext = `PROJECT OVERVIEW:\n${overallSummary}\n\n`;
+          
+          // Add the project summary to the beginning of the context
+          contextContent = projectSummaryContext + contextContent;
+        }
             
         // Cache the context for future use
         if (context.length > 0) {
@@ -554,9 +566,20 @@ export class AnthropicService {
         contextContent = cachedContext.contextContent;
         usedCachedContext = true;
       } else {
+        // Get the project summary if available
+        const overallSummary = await config.get(`summaries.${projectId}.overall`) as string | undefined;
+        
         // Generate new optimized context content, taking into account conversation state
         contextContent = this.optimizeContextContent(context, queryComplexity, followUp);
             
+        // If no search results were found or they're minimal, add the project summary
+        if ((context.length === 0 || contextContent.length < 1000) && overallSummary) {
+          const projectSummaryContext = `PROJECT OVERVIEW:\n${overallSummary}\n\n`;
+          
+          // Add the project summary to the beginning of the context
+          contextContent = projectSummaryContext + contextContent;
+        }
+        
         // Cache the context for future use
         if (context.length > 0) {
           this.updateCache(projectId, topicId, contextContent, context);
