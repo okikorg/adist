@@ -21,7 +21,7 @@ const truncateContent = (content: string, maxLines = 15, maxLineLength = 100): s
 };
 
 export const getCommand = new Command('get')
-  .description('Search for documents in the current project')
+  .description('Search for documents in the current project (legacy method, use default get for block-based search)')
   .argument('<query>', 'Search query')
   .option('-d, --debug', 'Show debug information')
   .action(async (query: string, options: { debug?: boolean }) => {

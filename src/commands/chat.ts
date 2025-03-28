@@ -6,6 +6,7 @@ import { LLMServiceFactory } from '../utils/llm-service.js';
 import readline from 'readline';
 import { parseMessageWithCodeHighlighting, processStreamingChunk } from '../utils/code-message-parser.js';
 import { reindexCurrentProject } from '../utils/indexer.js';
+import { BlockIndexer, BlockSearchEngine } from '../utils/block-indexer.js';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -44,10 +45,17 @@ export const chatCommand = new Command('chat')
 
       // Check if project has indexes
       const indexes = await config.get(`indexes.${currentProjectId}`) as any[] | undefined;
-      if (!indexes || indexes.length === 0) {
+      const blockIndexes = await config.get(`block-indexes.${currentProjectId}`) as any[] | undefined;
+      
+      if ((!indexes || indexes.length === 0) && (!blockIndexes || blockIndexes.length === 0)) {
         console.error(pc.bold(pc.red('✘ Project has no indexed files.')));
         console.log(pc.yellow('Run "adist reindex" to index your project files.'));
         process.exit(1);
+      }
+      
+      if (!blockIndexes || blockIndexes.length === 0) {
+        console.log(pc.yellow('⚠️ Project does not have block-based indexes.'));
+        console.log(pc.dim('Run "adist reindex" to create block-based indexes for better search results.'));
       }
 
       // Check if project has summaries
@@ -138,15 +146,16 @@ export const chatCommand = new Command('chat')
               return true;
 
             case 'reindex':
-              console.log(pc.yellow('\nReindexing project with summaries...'));
+              console.log(pc.yellow('\nReindexing project with block-based indexing and summaries...'));
               console.log(pc.dim('This will take a few moments...'));
               
               // Temporarily pause the chat interface
               rl.pause();
               
               try {
-                await reindexCurrentProject({ withSummaries: true });
-                console.log(pc.green('\n✓ Project reindexed successfully!'));
+                const blockIndexer = new BlockIndexer();
+                await blockIndexer.indexCurrentProject({ withSummaries: true });
+                console.log(pc.green('\n✓ Project reindexed successfully with block-based indexing!'));
               } catch (error) {
                 console.error(pc.red('\nError during reindexing:'), error);
               } finally {
@@ -190,24 +199,120 @@ export const chatCommand = new Command('chat')
             (userInput.split(/\s+/).length <= 5) // Short follow-up questions are often related
           );
 
-          // Search for relevant documents
-          const results = await searchDocuments(userInput);
+          // Search for relevant documents using block-based search
+          const searchEngine = new BlockSearchEngine();
+          const blockResults = await searchEngine.searchBlocks(userInput);
+          
+          // Format results for the LLM
+          const results = blockResults.map(result => {
+            // Combine all block contents for the document
+            const content = result.blocks.map(block => {
+              let blockHeader = `--- ${block.type}`;
+              if (block.title) blockHeader += `: ${block.title}`;
+              blockHeader += ` (lines ${block.startLine}-${block.endLine}) ---`;
+              return `${blockHeader}\n${block.content}`;
+            }).join('\n\n');
+            
+            return {
+              path: result.document,
+              content: content
+            };
+          });
           
           // Debug logging
           if (showDebugInfo) {
-            console.log(pc.bold(pc.cyan('Debug Info:')));
-            console.log(`Found ${results.length} relevant document(s)`);
-            if (results.length > 0) {
-              console.log('Document paths:');
-              results.forEach((doc, index) => {
-                // Check if this is a similar document (added through semantic similarity)
-                const isSimilarDoc = doc.score === 0.5;
-                if (isSimilarDoc) {
-                  console.log(` - ${doc.path} ${pc.dim('(semantically similar)')}`);
-                } else {
-                  console.log(` - ${doc.path}`);
-                }
+            console.log(pc.bold(pc.cyan('\nDebug Info:')));
+            console.log(`Found ${blockResults.length} document(s) with ${blockResults.reduce((count, doc) => count + doc.blocks.length, 0)} relevant blocks`);
+            if (blockResults.length > 0) {
+              // Tree-like representation of search results
+              console.log('\nDocument tree:');
+              
+              // Define interfaces for our tree structure
+              interface BlockInfo {
+                type: string;
+                title?: string;
+                startLine: number;
+                endLine: number;
+                content: string;
+              }
+              
+              interface FileNode {
+                isFile: true;
+                blocks: BlockInfo[];
+                count: number;
+              }
+              
+              interface DirectoryNode extends Map<string, DirectoryNode | FileNode> {}
+              
+              const projectStructure = new Map<string, DirectoryNode | FileNode>();
+              blockResults.forEach(doc => {
+                // Split the document path to get directories and filename
+                const pathParts = doc.document.split('/');
+                const fileName = pathParts.pop() || '';
+                
+                // Build the tree structure
+                let currentLevel: DirectoryNode = projectStructure as DirectoryNode;
+                pathParts.forEach(part => {
+                  if (!currentLevel.has(part)) {
+                    currentLevel.set(part, new Map<string, DirectoryNode | FileNode>());
+                  }
+                  currentLevel = currentLevel.get(part) as DirectoryNode;
+                });
+                
+                // Add file with block info
+                currentLevel.set(fileName, {
+                  isFile: true,
+                  blocks: doc.blocks,
+                  count: doc.blocks.length
+                });
               });
+              
+              // Helper function to print the tree
+              const printTree = (structure: DirectoryNode, prefix = '', isLast = true): void => {
+                // Sort entries - directories first, then files
+                const entries = [...structure.entries()].sort((a, b) => {
+                  const aIsDir = !(a[1] as FileNode).isFile;
+                  const bIsDir = !(b[1] as FileNode).isFile;
+                  if (aIsDir && !bIsDir) return -1;
+                  if (!aIsDir && bIsDir) return 1;
+                  return a[0].localeCompare(b[0]);
+                });
+                
+                entries.forEach(([key, value], index) => {
+                  const isLastEntry = index === entries.length - 1;
+                  const connector = isLast ? '└── ' : '├── ';
+                  const childPrefix = isLast ? '    ' : '│   ';
+                  
+                  if ((value as FileNode).isFile) {
+                    const fileNode = value as FileNode;
+                    const blockInfo = fileNode.count > 0 ? pc.cyan(` (${fileNode.count} blocks)`) : '';
+                    console.log(`${prefix}${connector}${pc.bold(key)}${blockInfo}`);
+                    
+                    // Show block details with prettier formatting
+                    if (fileNode.count > 0) {
+                      const blocksToShow = fileNode.blocks.slice(0, 3);
+                      blocksToShow.forEach((block: BlockInfo, blockIndex: number) => {
+                        const isLastBlock = blockIndex === blocksToShow.length - 1 && fileNode.count <= 3;
+                        const blockConnector = isLastBlock ? '└── ' : '├── ';
+                        let blockDesc = `${block.type}`;
+                        if (block.title) blockDesc += `: ${block.title}`;
+                        blockDesc += ` (lines ${block.startLine}-${block.endLine})`;
+                        console.log(`${prefix}${childPrefix}${blockConnector}${blockDesc}`);
+                      });
+                      
+                      if (fileNode.count > 3) {
+                        console.log(`${prefix}${childPrefix}└── ${pc.dim(`... and ${fileNode.count - 3} more blocks`)}`);
+                      }
+                    }
+                  } else {
+                    // It's a directory
+                    console.log(`${prefix}${connector}${pc.cyan(key)}`);
+                    printTree(value as DirectoryNode, `${prefix}${childPrefix}`, isLastEntry);
+                  }
+                });
+              };
+              
+              printTree(projectStructure as DirectoryNode);
             }
           }
           
@@ -225,7 +330,7 @@ export const chatCommand = new Command('chat')
                 if (results.length === 0) {
                   console.log(pc.yellow('⚠️ No relevant documents found in the project to answer your question.'));
                   console.log(pc.dim('Try reindexing the project with:'));
-                  console.log(pc.cyan('  adist reindex --summarize'));
+                  console.log(pc.cyan('  adist reindex -s'));
                 }
                 
                 isDisplayingResponse = true;
@@ -254,7 +359,7 @@ export const chatCommand = new Command('chat')
             if (results.length === 0) {
               console.log(pc.yellow('⚠️ No relevant documents found in the project to answer your question.'));
               console.log(pc.dim('Try reindexing the project with:'));
-              console.log(pc.cyan('  adist reindex --summarize'));
+              console.log(pc.cyan('  adist reindex -s'));
             }
             
             // Apply syntax highlighting to code blocks in the response

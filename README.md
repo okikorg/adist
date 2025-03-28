@@ -4,11 +4,14 @@ A powerful CLI tool for indexing, searching, and having AI-powered conversations
 
 Developed by [okik.ai](https://okik.ai).
 
+> **⚠️ IMPORTANT**: This is an active development project. Breaking changes may occur between versions as we continue to improve the tool. Please check the changelog when updating.
+
 ## Features
 
 - 🔍 Fast document indexing and semantic searching
 - 📁 Support for multiple projects
 - 🎯 Project-specific search
+- 🧩 Block-based indexing for more precise document analysis
 - 🤖 LLM-powered document summarization using Anthropic's Claude or local Ollama models
 - 🗣️ Interactive chat with AI about your codebase
 - 📊 Project statistics and file analysis
@@ -209,6 +212,9 @@ The tool stores its configuration in:
 
 ## Recent Updates
 
+- Added block-based indexing as the default method for faster and more precise document analysis
+- Made block-based search the default search method for better contextual understanding
+- Legacy indexing and search methods are still available under `legacy-reindex` and `legacy-get`
 - Added support for Ollama to run LLM features locally without an API key
 - Added LLM provider configuration command for easy switching between Anthropic and Ollama
 - Added real-time streaming responses for chat and query commands
@@ -216,6 +222,17 @@ The tool stores its configuration in:
 - Enhanced document relevance ranking for more accurate results
 - Added automatic related document discovery for richer context
 - Optimized token usage to reduce API costs
+
+## Block-Based Indexing
+
+The latest version of adist uses block-based indexing by default, which:
+
+1. Splits documents into semantic blocks (functions, sections, paragraphs)
+2. Indexes each block individually with its metadata
+3. Allows for more precise searching and better context understanding
+4. Improves AI interactions by providing more relevant code snippets
+
+The previous full-document indexing method is still available as `legacy-reindex` and `legacy-get` commands.
 
 ## License
 

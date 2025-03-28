@@ -98,7 +98,7 @@ const formatBytes = (bytes: number): string => {
 /**
  * Index a project by its ID
  */
-export const indexProject = async (projectId: string, options: { withSummaries?: boolean } = {}): Promise<void> => {
+export const indexProject = async (projectId: string, options: { withSummaries?: boolean; verbose?: boolean } = {}): Promise<void> => {
     try {
         const projects = await config.get('projects') as Record<string, Project>;
         const project = projects[projectId];
@@ -489,7 +489,7 @@ export const searchDocuments = async (query: string): Promise<IndexedContent[]> 
 /**
  * Reindex the current project
  */
-export const reindexCurrentProject = async (options: { withSummaries?: boolean } = {}): Promise<void> => {
+export const reindexCurrentProject = async (options: { withSummaries?: boolean; verbose?: boolean } = {}): Promise<void> => {
     try {
         const currentProjectId = await config.get('currentProject') as string;
         if (!currentProjectId) {
@@ -506,7 +506,7 @@ export const reindexCurrentProject = async (options: { withSummaries?: boolean }
 /**
  * Initialize indices for all indexed projects
  */
-export const initializeIndices = async (options: { withSummaries?: boolean; projectId?: string } = {}): Promise<void> => {
+export const initializeIndices = async (options: { withSummaries?: boolean; projectId?: string; verbose?: boolean } = {}): Promise<void> => {
   const projects = await config.get('projects') as Record<string, Project>;
   
   // If projectId is provided, only initialize that project

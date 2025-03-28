@@ -1,6 +1,6 @@
 import pc from 'picocolors';
 import { Command } from 'commander';
-import { indexProject, reindexCurrentProject } from '../utils/indexer.js';
+import { BlockIndexer } from '../utils/block-indexer.js';
 import config from '../config.js';
 
 interface Project {
@@ -11,17 +11,21 @@ interface Project {
   hasSummaries?: boolean;
 }
 
-export const reindexCommand = new Command('reindex')
-  .description('Reindex a project or all projects (legacy method, use default reindex for block-based indexing)')
+/**
+ * Command for reindexing a project using the block-based indexer
+ */
+export const blockReindexCommand = new Command('block-reindex')
+  .description('Reindex a project using block-based indexing (default reindex method)')
   .argument('[projectName]', 'Optional project name to reindex')
   .option('-a, --all', 'Reindex all projects')
   .option('-s, --summarize', 'Generate summaries using configured LLM provider')
-  .option('-v, --verbose', 'Show verbose output during indexing')
-  .action(async (projectName: string | undefined, options: { all?: boolean; summarize?: boolean; verbose?: boolean }) => {
+  .action(async (projectName: string | undefined, options: { all?: boolean; summarize?: boolean }) => {
     try {
+      const blockIndexer = new BlockIndexer();
+      
       if (options.all) {
         // Reindex all projects
-        console.log(pc.bold(pc.cyan('🔄 Reindexing all projects')));
+        console.log(pc.bold(pc.cyan('🔄 Reindexing all projects with block-based indexing')));
         if (options.summarize) {
           console.log(pc.yellow('⚠️ Summarization enabled'));
         }
@@ -44,7 +48,7 @@ export const reindexCommand = new Command('reindex')
           console.log(pc.cyan(`\nReindexing: ${pc.bold(String(project.name))}`));
           
           try {
-            await indexProject(projectId, { withSummaries: options.summarize, verbose: options.verbose });
+            await blockIndexer.indexProject(projectId, { withSummaries: options.summarize });
             reindexed++;
           } catch (error) {
             console.error(pc.red(`Error reindexing ${project.name}:`), error);
@@ -71,18 +75,23 @@ export const reindexCommand = new Command('reindex')
           process.exit(1);
         }
 
-        console.log(pc.bold(pc.cyan(`🔄 Reindexing project: ${projectName}`)));
+        console.log(pc.bold(pc.cyan(`🔄 Reindexing project with block-based indexing: ${projectName}`)));
         if (options.summarize) {
           console.log(pc.yellow('⚠️ Summarization enabled'));
         }
 
-        await indexProject(projectId, { withSummaries: options.summarize, verbose: options.verbose });
+        await blockIndexer.indexProject(projectId, { withSummaries: options.summarize });
         console.log(pc.green('✓ Project reindexed successfully!'));
         process.exit(0);
       }
 
       // Reindex current project
-      await reindexCurrentProject({ withSummaries: options.summarize, verbose: options.verbose });
+      console.log(pc.bold(pc.cyan('🔄 Reindexing current project with block-based indexing')));
+      if (options.summarize) {
+        console.log(pc.yellow('⚠️ Summarization enabled'));
+      }
+      
+      await blockIndexer.indexCurrentProject({ withSummaries: options.summarize });
       console.log(pc.green('✓ Current project reindexed successfully!'));
       process.exit(0);
     } catch (error) {
@@ -91,7 +100,14 @@ export const reindexCommand = new Command('reindex')
     }
   });
 
-export const reindex = async (projectName?: string, options?: { all?: boolean; summarize?: boolean; verbose?: boolean }): Promise<void> => {
+/**
+ * Block reindex function for programmatic use
+ */
+export const blockReindex = async (projectName?: string, options?: { all?: boolean; summarize?: boolean }): Promise<void> => {
   // This is just a wrapper function to maintain backward compatibility
-  await reindexCommand.parseAsync([projectName, ...(options?.all ? ['--all'] : []), ...(options?.summarize ? ['--summarize'] : []), ...(options?.verbose ? ['--verbose'] : [])].filter(Boolean) as string[]);
+  await blockReindexCommand.parseAsync([
+    projectName, 
+    ...(options?.all ? ['--all'] : []), 
+    ...(options?.summarize ? ['--summarize'] : [])
+  ].filter(Boolean) as string[]);
 }; 

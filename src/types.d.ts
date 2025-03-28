@@ -87,9 +87,85 @@ export interface Project {
     name: string;
     indexed: boolean;
     lastIndexed?: Date;
+    hasSummaries?: boolean;
 }
 
 export interface AdistConfig {
     projects: Record<string, Project>;
     currentProject?: string;
+}
+
+// Block-based indexing types
+export interface DocumentBlock {
+  id: string;             // Unique ID for the block
+  type: BlockType;        // Type of block
+  content: string;        // Content of the block
+  startLine: number;      // Start line number (1-indexed)
+  endLine: number;        // End line number (1-indexed)
+  path: string;           // File path relative to project root
+  title?: string;         // Block title (e.g., header text, function name)
+  parent?: string;        // Parent block ID (for hierarchy)
+  children?: string[];    // Child block IDs
+  metadata?: BlockMetadata; // Additional metadata based on block type
+  summary?: string;       // Optional summary of the block
+}
+
+export type BlockType = 
+  // Document blocks
+  'document' |            // The entire document
+  'heading' |             // A markdown heading section
+  'paragraph' |           // A paragraph of text
+  'list' |                // A list in markdown
+  'codeblock' |           // A code block in markdown
+  'table' |               // A table in markdown
+  
+  // Code blocks
+  'imports' |             // Import statements section
+  'interface' |           // Interface declaration
+  'type' |                // Type declaration
+  'class' |               // Class declaration
+  'function' |            // Function declaration
+  'method' |              // Class method
+  'variable' |            // Variable declaration
+  'export' |              // Export statement
+  'comment' |             // Comment block
+  'jsx' |                 // JSX/TSX component
+  'unknown';              // Fallback type
+
+export interface BlockMetadata {
+  language?: string;      // For code blocks
+  level?: number;         // For headings (h1, h2, etc.)
+  tags?: string[];        // Extracted tags or keywords
+  dependencies?: string[]; // For imports, what's being imported
+  exports?: string[];     // For exports, what's being exported
+  signature?: string;     // For functions, methods, etc.
+  visibility?: 'public' | 'private' | 'protected'; // For class members
+  ordered?: boolean;      // For ordered lists in markdown
+  spread?: boolean;       // For spread lists in markdown
+  checked?: boolean;      // For checkboxes in markdown
+  name?: string;          // Name of the entity (function, class, variable, etc.)
+}
+
+export interface IndexedDocument {
+  path: string;           // File path relative to project root
+  blocks: DocumentBlock[]; // Blocks in the document
+  title: string;          // Document title
+  lastModified: number;   // Last modified timestamp
+  size: number;           // File size in bytes
+  language?: string;      // Detected language
+  blockHierarchy: BlockHierarchy; // Hierarchical structure
+}
+
+export interface BlockHierarchy {
+  root: string;           // Root block ID
+  blockMap: Record<string, {
+    block: string;        // Block ID
+    children: string[];   // Child block IDs
+  }>;
+}
+
+export interface SearchResult {
+  document: string;       // Document path
+  blocks: DocumentBlock[]; // Matching blocks
+  score: number;          // Relevance score
 } 
