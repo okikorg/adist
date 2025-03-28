@@ -44,7 +44,7 @@ async function main() {
       return list(options);
     };
 
-    const switchProject = async (projectName: string) => {
+    const switchProject = async (projectName?: string) => {
       const { switchProject } = await import('./commands/switch.js');
       return switchProject(projectName);
     };
@@ -72,8 +72,8 @@ async function main() {
 
     // Switch to a different project
     program
-      .command('switch <projectName>')
-      .description('Switch to a specific project by name')
+      .command('switch [projectName]')
+      .description('Switch to a specific project by name or select from a list')
       .action(switchProject);
 
     // List all projects
@@ -132,6 +132,10 @@ async function main() {
       .command('remove-project-id <projectId>')
       .description('Remove a project by its ID (for troubleshooting)')
       .action(removeProjectByIdCmd);
+
+    // Test headings command (for development/debugging)
+    const { testHeadingsCommand } = await import('./commands/test-headings.js');
+    program.addCommand(testHeadingsCommand);
   }
 
   // Parse command line arguments

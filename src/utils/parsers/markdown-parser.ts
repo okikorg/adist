@@ -58,6 +58,9 @@ export class MarkdownParser implements Parser {
     
     // Keep track of the current heading stack for hierarchy
     const headingStack: DocumentBlock[] = [rootBlock];
+    
+    // Track headings with their levels and line numbers for content extraction
+    const headings: { id: string; level: number; startLine: number; endLine: number }[] = [];
 
     // Process the AST
     visit(ast, (node, index, parent) => {
@@ -80,10 +83,21 @@ export class MarkdownParser implements Parser {
         const level = heading.depth;
         const text = this.getTextFromNode(heading);
         
+        // First, update the endLine of the previous heading of the same or lower level
+        for (let i = headings.length - 1; i >= 0; i--) {
+          const prevHeading = headings[i];
+          if (prevHeading.level <= level) {
+            prevHeading.endLine = startLine - 1;
+            break;
+          }
+        }
+        
+        // Create block with just the heading line initially
+        // We'll update the content later to include the content under this heading
         block = {
           id: uuidv4(),
           type: 'heading',
-          content: this.extractContent(content, startLine, endLine),
+          content: this.extractContent(content, startLine, endLine, true),
           startLine,
           endLine,
           path: filePath,
@@ -93,6 +107,14 @@ export class MarkdownParser implements Parser {
             level,
           },
         };
+        
+        // Add this heading to our tracking array
+        headings.push({ 
+          id: block.id, 
+          level, 
+          startLine, 
+          endLine: content.split('\n').length // Default to end of document
+        });
         
         // Update heading stack based on heading level
         // Pop headings of same or lower level
@@ -238,6 +260,19 @@ export class MarkdownParser implements Parser {
       }
     });
 
+    // After processing all nodes, update heading blocks with their content
+    for (const heading of headings) {
+      const block = blocks.find(b => b.id === heading.id);
+      if (block) {
+        // Extract content from the heading line (startLine) to the end of the section (endLine)
+        const lines = content.split('\n');
+        if (heading.startLine <= heading.endLine && heading.startLine <= lines.length) {
+          // Include the complete section content
+          block.content = lines.slice(heading.startLine - 1, heading.endLine).join('\n');
+        }
+      }
+    }
+
     return {
       path: filePath,
       blocks,
@@ -271,7 +306,7 @@ export class MarkdownParser implements Parser {
   /**
    * Extract content from line numbers
    */
-  private extractContent(content: string, startLine: number, endLine: number): string {
+  private extractContent(content: string, startLine: number, endLine: number, isHeading: boolean = false): string {
     const lines = content.split('\n');
     return lines.slice(startLine - 1, endLine).join('\n');
   }

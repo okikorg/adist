@@ -1,0 +1,1 @@
+import config from "../src/config.js"; async function main() { try { const currentProjectId = await config.get("currentProject"); console.log("Current project:", currentProjectId); const summaries = await config.get(`summaries.${currentProjectId}`); console.log("Summaries:", typeof summaries); } catch (err) { console.error("Error:", err); } } main();

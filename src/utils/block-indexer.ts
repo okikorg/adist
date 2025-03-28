@@ -265,6 +265,7 @@ export class BlockSearchEngine {
       // Score each block
       const scoredBlocks = document.blocks.map(block => {
         const score = this.scoreBlock(block, queryTerms);
+        
         return { block, score };
       }).filter(({ score }) => score > 0);
 
