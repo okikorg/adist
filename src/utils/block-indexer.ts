@@ -102,18 +102,19 @@ export class BlockIndexer {
       }
 
       for (const file of files) {
+        let document: IndexedDocument | null = null;
         try {
           const content = await fs.readFile(file, 'utf-8');
           const relativePath = path.relative(project.path, file);
           const stats = await fs.stat(file);
 
           // Parse document into blocks
-          const document = await this.parserRegistry.parse(relativePath, content, {
+          document = await this.parserRegistry.parse(relativePath, content, {
             size: stats.size,
             mtime: stats.mtime
           });
 
-          // Generate summaries if requested
+          // Generate summaries if requested and document exists
           if (options.withSummaries && llmService && document) {
             try {
               if (options.verbose) console.log(pc.dim(`Generating summary for ${relativePath}...`));
@@ -153,15 +154,53 @@ export class BlockIndexer {
             }
           }
 
-          if (document) {
-            indexedDocuments.push(document);
+        } catch (error: any) {
+          const relativePath = path.relative(project.path, file);
+          if (error.message?.includes('Could not find the language') && error.message?.includes('mermaid')) {
+            console.warn(pc.yellow(`⚠️ Skipping mermaid diagram parsing in ${relativePath}. Indexing as plain text.`));
+            // Read content and stats again since we're in catch block
+            const mermaidContent = await fs.readFile(file, 'utf-8');
+            const stats = await fs.stat(file);
+            
+            // Create full IndexedDocument with required properties
+            const blockId = `mermaid-${relativePath}`;
+            document = {
+              path: relativePath,
+              title: path.basename(relativePath),
+              lastModified: stats.mtime.getTime(), // Convert Date to timestamp
+              size: stats.size,
+              blocks: [{
+                id: blockId,
+                type: 'document',
+                path: relativePath,
+                content: mermaidContent,
+                startLine: 1,
+                endLine: mermaidContent.split('\n').length,
+                parent: undefined,
+                title: path.basename(relativePath)
+              }],
+              blockHierarchy: {
+                root: blockId,
+                blockMap: {
+                  [blockId]: {
+                    block: blockId,
+                    children: []
+                  }
+                }
+              }
+            };
+          } else {
+            console.error(pc.red(`Error processing file ${relativePath}:`), error);
           }
-
-          progressBar.increment(1, { file: relativePath });
-        } catch (error) {
-          console.error(pc.red(`Error processing file ${file}:`), error);
-          progressBar.increment(1, { file: 'Error: ' + path.relative(project.path, file) });
+          progressBar.increment(1, { file: 'Error: ' + relativePath });
+          continue;
         }
+
+        if (document) {
+          indexedDocuments.push(document);
+        }
+        
+        progressBar.increment(1, { file: path.relative(project.path, file) });
       }
 
       progressBar.stop();

@@ -29,6 +29,9 @@ export interface LLMService {
     usedCachedContext?: boolean;
     queryComplexity?: 'low' | 'medium' | 'high';
   }>;
+  
+  // New method to ensure responses are in markdown format
+  ensureMarkdownFormat(text: string): Promise<string>;
 }
 
 export enum LLMProvider {

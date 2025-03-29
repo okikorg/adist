@@ -26,6 +26,21 @@ export class AnthropicService {
   private cacheTimeout: number = 30 * 60 * 1000;
   // Maximum combined context length to prevent hitting token limits
   private maxContextLength: number = 60000;
+  
+  // Markdown formatting system message
+  private markdownFormatSystemMessage: string = `
+Please format your responses using proper Markdown formatting:
+1. Use \`#\`, \`##\`, \`###\` for headers
+2. Use \`*text*\` for italic and \`**text**\` for bold
+3. Use \`\`\`language\n...\n\`\`\` for code blocks with appropriate language tags (js, python, etc.)
+4. Use \`code\` for inline code
+5. Use bullet lists with \`*\` or \`-\` and numbered lists with \`1.\`, \`2.\`, etc.
+6. Use \`>\` for blockquotes
+7. Use \`---\` for horizontal rules where appropriate
+8. Use \`[text](url)\` for links
+
+Your response MUST be consistently formatted in Markdown throughout.
+`;
 
   constructor() {
     if (!process.env.ANTHROPIC_API_KEY) {
@@ -461,11 +476,20 @@ export class AnthropicService {
       let inputTokens = 0;
       let outputTokens = 0;
 
-      // Base message parameters
+      // Base message parameters with markdown formatting instructions
       const baseParams = {
         model: this.model,
         max_tokens: 1000,
-        system: `You are a helpful assistant with access to the following project context. Use this context to provide accurate and relevant answers. If the answer cannot be found in the context, say so. Be concise but informative.\n\nContext:\n${contextContent}`,
+        system: `You are a helpful assistant with access to the following project context. Use this context to provide accurate and relevant answers. If the answer cannot be found in the context, say so. Be concise but informative.
+
+Format your response using proper Markdown:
+1. Use # for main headers, ## for subheaders, and ### for sub-subheaders
+2. Use *text* for italic and **text** for bold text
+3. Use \`\`\`language\n...\n\`\`\` for code blocks with appropriate language tags (js, python, java, etc.)
+4. Use \`code\` for inline code references
+5. Use bullet lists with * or - and numbered lists with 1., 2., etc.
+
+Context:\n${contextContent}`,
         messages: [{
           role: 'user' as const,
           content: query
@@ -596,11 +620,20 @@ export class AnthropicService {
         content: m.content
       }));
 
-      // Base message parameters
+      // Base message parameters with markdown formatting instructions
       const baseParams = {
         model: this.model,
         max_tokens: 1000,
-        system: `You are a helpful assistant with access to the following project context. Use this context to provide accurate and relevant answers. If the answer cannot be found in the context, say so. Be concise but informative.\n\nContext:\n${contextContent}`,
+        system: `You are a helpful assistant with access to the following project context. Use this context to provide accurate and relevant answers. If the answer cannot be found in the context, say so. Be concise but informative.
+
+Format your response using proper Markdown:
+1. Use # for main headers, ## for subheaders, and ### for sub-subheaders
+2. Use *text* for italic and **text** for bold text
+3. Use \`\`\`language\n...\n\`\`\` for code blocks with appropriate language tags (js, python, java, etc.)
+4. Use \`code\` for inline code references
+5. Use bullet lists with * or - and numbered lists with 1., 2., etc.
+
+Context:\n${contextContent}`,
         messages: typedMessages
       };
 
@@ -682,5 +715,48 @@ export class AnthropicService {
     }
     
     return similarTopics;
+  }
+  
+  /**
+   * Ensures the response is properly formatted as markdown
+   * If the text is not already in markdown format, it will be converted
+   * @param text The text to format as markdown
+   * @returns The text formatted as markdown
+   */
+  async ensureMarkdownFormat(text: string): Promise<string> {
+    // Check if the text already contains markdown elements
+    const hasMarkdown = 
+      text.includes('```') || // Code blocks
+      /^#+\s+.+$/m.test(text) || // Headers
+      /\*\*.+\*\*/m.test(text) || // Bold
+      /\*.+\*/m.test(text) || // Italic
+      /^-\s+.+$/m.test(text) || // Unordered lists
+      /^\d+\.\s+.+$/m.test(text); // Ordered lists
+    
+    // If it already has markdown formatting, return as is
+    if (hasMarkdown) {
+      return text;
+    }
+    
+    try {
+      // If no markdown detected, use Claude to format it
+      const response = await this.client.messages.create({
+        model: this.model,
+        max_tokens: 1500,
+        system: this.markdownFormatSystemMessage,
+        messages: [{
+          role: 'user',
+          content: `Please convert the following text to properly formatted Markdown without changing any meaning or content:
+
+${text}`
+        }]
+      });
+      
+      return response.content[0].text;
+    } catch (error) {
+      console.error(pc.yellow('Error formatting as markdown:'), error);
+      // If formatting fails, return the original text
+      return text;
+    }
   }
 } 

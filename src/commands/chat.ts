@@ -4,7 +4,7 @@ import config from '../config.js';
 import { searchDocuments } from '../utils/indexer.js';
 import { LLMServiceFactory } from '../utils/llm-service.js';
 import readline from 'readline';
-import { parseMessageWithCodeHighlighting, processStreamingChunk } from '../utils/code-message-parser.js';
+import { parseMessageWithCodeHighlighting, parseMessageWithMarkdownHighlighting, processStreamingChunk, formatMarkdownDocument } from '../utils/code-message-parser.js';
 import { reindexCurrentProject } from '../utils/indexer.js';
 import { BlockIndexer, BlockSearchEngine } from '../utils/block-indexer.js';
 
@@ -427,7 +427,7 @@ export const chatCommand = new Command('chat')
             async (chunk) => {
               // Only add the answer header and debug info on the first chunk
               if (!isDisplayingResponse) {
-                console.log(pc.bold(pc.cyan('Assistant:')));
+                console.log(pc.bold(pc.cyan('\nAssistant:')));
                 
                 if (results.length === 0) {
                   if (hasSummary) {
@@ -473,7 +473,7 @@ export const chatCommand = new Command('chat')
             }
             
             // Apply syntax highlighting to code blocks in the response
-            const highlightedResponse = parseMessageWithCodeHighlighting(response.summary);
+            const highlightedResponse = formatMarkdownDocument(response.summary);
             console.log(highlightedResponse);
           }
           

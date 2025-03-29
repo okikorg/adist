@@ -3,7 +3,7 @@ import pc from 'picocolors';
 import config from '../config.js';
 import { BlockSearchEngine } from '../utils/block-indexer.js';
 import { LLMServiceFactory } from '../utils/llm-service.js';
-import { parseMessageWithCodeHighlighting, processStreamingChunk } from '../utils/code-message-parser.js';
+import { parseMessageWithCodeHighlighting, parseMessageWithMarkdownHighlighting, processStreamingChunk, formatMarkdownDocument } from '../utils/code-message-parser.js';
 
 export const queryCommand = new Command('query')
   .description('Query your project with natural language')
@@ -243,7 +243,7 @@ export const queryCommand = new Command('query')
           process.stdout.write('\n');
         } else {
           // Fallback if streaming didn't work
-          const highlightedResponse = parseMessageWithCodeHighlighting(response.summary);
+          const highlightedResponse = formatMarkdownDocument(response.summary);
           console.log(highlightedResponse);
         }
         
