@@ -1,5 +1,6 @@
 import pc from 'picocolors';
 import fetch from 'node-fetch';
+import config from '../config.js';
 
 interface SummaryResult {
   summary: string;
@@ -25,6 +26,22 @@ export class OllamaService {
   private cacheTimeout: number = 30 * 60 * 1000;
   // Maximum combined context length to prevent hitting token limits
   private maxContextLength: number = 30000; // Lower than Anthropic due to potential limitations in Ollama models
+  
+  // Markdown formatting system message
+  private markdownFormatSystemMessage: string = `
+You are a helpful assistant that formats text into well-structured Markdown.
+Please format all responses using proper Markdown formatting:
+1. Use # for main headers, ## for subheaders, and ### for sub-subheaders
+2. Use *text* for italic and **text** for bold
+3. Use \`\`\`language\n...\n\`\`\` for code blocks with appropriate language tags
+4. Use \`code\` for inline code
+5. Use bullet lists with * or - and numbered lists with 1., 2., etc.
+6. Use > for blockquotes
+7. Use --- for horizontal rules where appropriate
+8. Use [text](url) for links
+
+Your response MUST be consistently formatted in Markdown throughout.
+`;
 
   constructor(baseUrl: string = 'http://localhost:11434', model: string = 'llama3') {
     this.baseUrl = baseUrl;
@@ -584,12 +601,36 @@ ANSWER:`;
           // Generate new context with appropriate complexity
           const queryComplexity = this.estimateQueryComplexity(latestQuery);
           contextContent = this.optimizeContextContent(context, queryComplexity, followUp);
+          
+          // Get the project summary if available
+          const overallSummary = await config.get(`summaries.${projectId}.overall`) as string | undefined;
+          
+          // If no search results were found or they're minimal, add the project summary
+          if ((context.length === 0 || contextContent.length < 1000) && overallSummary) {
+            const projectSummaryContext = `PROJECT OVERVIEW:\n${overallSummary}\n\n`;
+            
+            // Add the project summary to the beginning of the context
+            contextContent = projectSummaryContext + contextContent;
+          }
+          
           this.updateCache(projectId, topicId, contextContent, context);
         }
       } else {
         // Generate new context for new topics
         const queryComplexity = this.estimateQueryComplexity(latestQuery);
         contextContent = this.optimizeContextContent(context, queryComplexity);
+        
+        // Get the project summary if available
+        const overallSummary = await config.get(`summaries.${projectId}.overall`) as string | undefined;
+        
+        // If no search results were found or they're minimal, add the project summary
+        if ((context.length === 0 || contextContent.length < 1000) && overallSummary) {
+          const projectSummaryContext = `PROJECT OVERVIEW:\n${overallSummary}\n\n`;
+          
+          // Add the project summary to the beginning of the context
+          contextContent = projectSummaryContext + contextContent;
+        }
+        
         this.updateCache(projectId, topicId, contextContent, context);
       }
 
@@ -601,6 +642,17 @@ ANSWER:`;
       const prompt = `You are a helpful AI assistant with expertise in software development. You are having a conversation about a code project.
 Use ONLY the context provided below to answer questions. If you don't know something based on the context, say so.
 Be concise and specific in your responses. Provide code examples only when directly relevant.
+
+Format your response using proper Markdown:
+1. Use # for main headers, ## for subheaders, and ### for sub-subheaders
+2. Use *text* for italic and **text** for bold
+3. Use \`\`\`language\n...\n\`\`\` for code blocks with language tags
+4. Use \`code\` for inline code references
+5. Use bullet lists with * or - and numbered lists with 1., 2., etc.
+
+IMPORTANT: Always use syntax highlighting by specifying the language when creating code blocks. 
+For example, use \`\`\`javascript, \`\`\`python, \`\`\`typescript, etc. rather than just \`\`\`. 
+This ensures proper syntax highlighting in the terminal.
 
 CONTEXT:
 ${contextContent}
@@ -707,6 +759,57 @@ ANSWER:`;
         summary: `Failed to chat with project: ${error instanceof Error ? error.message : String(error)}`,
         cost: 0
       };
+    }
+  }
+  
+  /**
+   * Ensures the response is properly formatted as markdown
+   * If the text is not already in markdown format, it will be converted
+   * @param text The text to format as markdown
+   * @returns The text formatted as markdown
+   */
+  async ensureMarkdownFormat(text: string): Promise<string> {
+    // Check if the text already contains markdown elements
+    const hasMarkdown = 
+      text.includes('```') || // Code blocks
+      /^#+\s+.+$/m.test(text) || // Headers
+      /\*\*.+\*\*/m.test(text) || // Bold
+      /\*.+\*/m.test(text) || // Italic
+      /^-\s+.+$/m.test(text) || // Unordered lists
+      /^\d+\.\s+.+$/m.test(text); // Ordered lists
+    
+    // If it already has markdown formatting, return as is
+    if (hasMarkdown) {
+      return text;
+    }
+    
+    try {
+      // If no markdown detected, use the model to format it
+      const response = await fetch(`${this.baseUrl}/api/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: this.model,
+          prompt: `${this.markdownFormatSystemMessage}
+
+Please convert the following text to properly formatted Markdown without changing any meaning or content:
+
+${text}`,
+          stream: false
+        })
+      });
+
+      if (!response.ok) {
+        console.warn(pc.yellow(`Warning: Failed to format as markdown: ${response.statusText}`));
+        return text;
+      }
+
+      const data = await response.json() as { response: string };
+      return data.response.trim();
+    } catch (error) {
+      console.error(pc.yellow('Error formatting as markdown:'), error);
+      // If formatting fails, return the original text
+      return text;
     }
   }
 } 

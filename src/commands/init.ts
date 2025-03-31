@@ -3,6 +3,7 @@ import path from 'path';
 import pc from 'picocolors';
 import config from '../config.js';
 import { initializeIndices } from '../utils/indexer.js';
+import { BlockIndexer } from '../utils/block-indexer.js';
 import readline from 'readline';
 
 interface Project {
@@ -86,6 +87,10 @@ export const init = async (projectName: string) => {
 
         // Load indices for the project with summarization if enabled
         await initializeIndices({ withSummaries: hasSummaries, projectId });
+        
+        // Initialize block indexing as well
+        const blockIndexer = new BlockIndexer();
+        await blockIndexer.indexProject(projectId, { withSummaries: hasSummaries });
 
         console.log(pc.bold(pc.green('\n✓ Project initialized successfully!')));
         console.log(pc.dim(`Run ${pc.cyan('adist get "<query>"')} to search for documents.`));

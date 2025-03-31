@@ -74,25 +74,47 @@ export const summaryCommand = new Command('summary')
       }
 
       if (options.list) {
-        // Get all indexes with summaries
-        const indexes = await config.get(`indexes.${targetProjectId}`) as Array<{ path: string; summary?: string }> | undefined;
-        if (!indexes) {
-          console.error(pc.bold(pc.red('✘ Project has not been indexed.')));
-          process.exit(1);
+        // Try to get the indexes - first check block-based indexes, then fall back to regular indexes
+        let blockIndexes = await config.get(`block-indexes.${targetProjectId}`) as any[] | undefined;
+        let regularIndexes = await config.get(`indexes.${targetProjectId}`) as Array<{ path: string; summary?: string }> | undefined;
+        
+        // For block-based indexes, we need to extract file summaries from document blocks
+        let filesWithSummaries: Array<{ path: string; summary: string }> = [];
+        
+        if (blockIndexes && Array.isArray(blockIndexes)) {
+          // Extract file summaries from document blocks
+          filesWithSummaries = blockIndexes
+            .map(doc => {
+              // Find the document block which should contain the summary
+              const documentBlock = Array.isArray(doc.blocks) 
+                ? doc.blocks.find((block: any) => block.type === 'document' && block.summary)
+                : null;
+              
+              if (documentBlock && documentBlock.summary && doc.path) {
+                return {
+                  path: doc.path,
+                  summary: documentBlock.summary
+                };
+              }
+              return null;
+            })
+            .filter(Boolean) as Array<{ path: string; summary: string }>; // Remove null values
         }
-
-        // Filter out files without summaries
-        const filesWithSummaries = indexes.filter(index => index.summary);
+        
+        // If no block-based summaries, try regular indexes
+        if (filesWithSummaries.length === 0 && regularIndexes && Array.isArray(regularIndexes)) {
+          filesWithSummaries = regularIndexes.filter(index => index.summary) as Array<{ path: string; summary: string }>;
+        }
         
         if (filesWithSummaries.length === 0) {
           console.error(pc.bold(pc.yellow('⚠️ No files with summaries found in this project.')));
           process.exit(1);
         }
-
+        
         // Create choices for the interactive prompt
         const choices = filesWithSummaries.map(index => ({
           title: index.path,
-          description: truncate(index.summary, { length: 100 }),
+          description: truncate(index.summary || '', { length: 100 }),
           value: index.path,
           summary: index.summary
         }));
@@ -159,26 +181,40 @@ export const summaryCommand = new Command('summary')
       }
 
       if (options.file) {
-        // View specific file summary
-        const indexes = await config.get(`indexes.${targetProjectId}`) as Array<{ path: string; summary?: string }> | undefined;
-        if (!indexes) {
-          console.error(pc.bold(pc.red('✘ Project has not been indexed.')));
-          process.exit(1);
+        // Try to get the indexes - first check block-based indexes, then fall back to regular indexes
+        let blockIndexes = await config.get(`block-indexes.${targetProjectId}`) as any[] | undefined;
+        let regularIndexes = await config.get(`indexes.${targetProjectId}`) as Array<{ path: string; summary?: string }> | undefined;
+        
+        // First try block indexes
+        let fileSummary: string | undefined;
+        
+        if (blockIndexes && Array.isArray(blockIndexes)) {
+          // Look for the file in block-based indexes
+          const docEntry = blockIndexes.find(doc => doc.path === options.file);
+          if (docEntry && Array.isArray(docEntry.blocks)) {
+            // Find the document block which should contain the summary
+            const documentBlock = docEntry.blocks.find((block: any) => block.type === 'document' && block.summary);
+            if (documentBlock && documentBlock.summary) {
+              fileSummary = documentBlock.summary;
+            }
+          }
         }
-
-        const fileIndex = indexes.find(index => index.path === options.file);
-        if (!fileIndex) {
-          console.error(pc.bold(pc.red(`✘ File "${options.file}" not found in project.`)));
-          process.exit(1);
+        
+        // If no summary found in block indexes, try regular indexes
+        if (!fileSummary && regularIndexes && Array.isArray(regularIndexes)) {
+          const fileIndex = regularIndexes.find(index => index.path === options.file);
+          if (fileIndex && fileIndex.summary) {
+            fileSummary = fileIndex.summary;
+          }
         }
-
-        if (!fileIndex.summary) {
+        
+        if (!fileSummary) {
           console.error(pc.bold(pc.yellow(`⚠️ No summary available for "${options.file}".`)));
           process.exit(1);
         }
-
+        
         console.log(pc.bold(pc.cyan(`Summary for ${options.file}`)));
-        console.log(fileIndex.summary);
+        console.log(fileSummary);
         process.exit(0);
       } else {
         // View project summary

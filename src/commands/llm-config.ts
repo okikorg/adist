@@ -6,7 +6,7 @@ import { OllamaService } from '../utils/ollama.js';
 
 // Command to configure LLM settings
 export const llmConfigCommand = new Command('llm-config')
-  .description('Configure LLM provider settings (Anthropic or Ollama)')
+  .description('Configure LLM provider settings (Anthropic, OpenAI, or Ollama)')
   .action(async () => {
     try {
       // Ask user to select a provider
@@ -17,6 +17,7 @@ export const llmConfigCommand = new Command('llm-config')
           message: 'Select LLM provider:',
           choices: [
             { name: 'Anthropic Claude (requires API key)', value: LLMProvider.ANTHROPIC },
+            { name: 'OpenAI (requires API key)', value: LLMProvider.OPENAI },
             { name: 'Ollama (run locally)', value: LLMProvider.OLLAMA }
           ]
         }
@@ -31,9 +32,59 @@ export const llmConfigCommand = new Command('llm-config')
           return;
         }
 
+        // Ask for Anthropic configuration
+        const { model } = await inquirer.prompt([
+          {
+            type: 'list',
+            name: 'model',
+            message: 'Select Anthropic model:',
+            choices: [
+              { name: 'Claude 3 Opus (most capable, slower)', value: 'claude-3-opus-20240229' },
+              { name: 'Claude 3 Sonnet (recommended)', value: 'claude-3-sonnet-20240229' },
+              { name: 'Claude 3 Haiku (fastest)', value: 'claude-3-haiku-20240307' }
+            ]
+          }
+        ]);
+
+        // Configure Anthropic
+        await LLMServiceFactory.configureAnthropic(model);
+        
         // Set Anthropic as preferred provider
         await LLMServiceFactory.setPreferredLLMProvider(LLMProvider.ANTHROPIC);
+        
         console.log(pc.green('✓ Anthropic Claude configured as LLM provider.'));
+        console.log(pc.green(`  Model: ${model}`));
+      } else if (provider === LLMProvider.OPENAI) {
+        // Check if API key is set
+        if (!process.env.OPENAI_API_KEY) {
+          console.log(pc.yellow('⚠️ OPENAI_API_KEY environment variable is not set.'));
+          console.log(pc.dim('Please set this environment variable to use OpenAI models.'));
+          console.log(pc.dim('Example: export OPENAI_API_KEY=your-api-key'));
+          return;
+        }
+
+        // Ask for OpenAI configuration
+        const { model } = await inquirer.prompt([
+          {
+            type: 'list',
+            name: 'model',
+            message: 'Select OpenAI model:',
+            choices: [
+              { name: 'GPT-4o (recommended)', value: 'gpt-4o' },
+              { name: 'GPT-4 Turbo', value: 'gpt-4-turbo' },
+              { name: 'GPT-3.5 Turbo', value: 'gpt-3.5-turbo' }
+            ]
+          }
+        ]);
+
+        // Configure OpenAI
+        await LLMServiceFactory.configureOpenAI(model);
+        
+        // Set OpenAI as preferred provider
+        await LLMServiceFactory.setPreferredLLMProvider(LLMProvider.OPENAI);
+        
+        console.log(pc.green(`✓ OpenAI configured as LLM provider.`));
+        console.log(pc.green(`  Model: ${model}`));
       } else if (provider === LLMProvider.OLLAMA) {
         // Try to check if Ollama is running
         const tempOllama = new OllamaService();

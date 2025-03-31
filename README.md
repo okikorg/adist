@@ -4,11 +4,22 @@ A powerful CLI tool for indexing, searching, and having AI-powered conversations
 
 Developed by [okik.ai](https://okik.ai).
 
+## Contributing
+
+Contributions are welcome! Feel free to submit issues and pull requests to help improve Adist.
+
+The repository is hosted at [github.com/okikorg/adist](https://github.com/okikorg/adist.git).
+
+
+
+> **⚠️ IMPORTANT**: This is an active development project. Breaking changes may occur between versions as we continue to improve the tool. Please check the changelog when updating.
+
 ## Features
 
 - 🔍 Fast document indexing and semantic searching
 - 📁 Support for multiple projects
 - 🎯 Project-specific search
+- 🧩 Block-based indexing for more precise document analysis
 - 🤖 LLM-powered document summarization using Anthropic's Claude or local Ollama models
 - 🗣️ Interactive chat with AI about your codebase
 - 📊 Project statistics and file analysis
@@ -48,7 +59,13 @@ Search for documents in the current project using natural language queries.
 adist query "<question>"
 ```
 
-Ask questions about your project and get AI-powered answers with real-time streaming responses. The AI analyzes relevant documents from your codebase to provide contextual answers.
+Ask questions about your project and get AI-powered answers. The AI analyzes relevant documents from your codebase to provide contextual answers with proper code highlighting.
+
+For real-time streaming responses (note that code highlighting may be limited):
+
+```bash
+adist query "<question>" --stream
+```
 
 ### Chat with AI About Your Project
 
@@ -59,10 +76,18 @@ adist chat
 Start an interactive chat session with AI about your project. This mode provides:
 - Persistent conversation history within the session
 - Context awareness across multiple questions
-- Real-time streaming responses
+- Code syntax highlighting for better readability
 - Automatic retrieval of relevant documents for each query
 
-Type `exit` to end the chat session.
+By default, chat mode displays a loading spinner while generating responses. For real-time streaming responses, use:
+
+```bash
+adist chat --stream
+```
+
+Note that code highlighting may be limited in streaming mode.
+
+Type `/exit` to end the chat session.
 
 ### Switch Projects
 
@@ -118,13 +143,21 @@ adist llm-config
 
 Configure which LLM provider to use:
 - Anthropic Claude (cloud-based, requires API key)
+  - Claude 3 Opus 
+  - Claude 3 Sonnet 
+  - Claude 3 Haiku
+- OpenAI (cloud-based, requires API key)
+  - GPT-4o 
+  - GPT-4 Turbo
+  - GPT-3.5 Turbo
 - Ollama (run locally, no API key needed)
+  - Choose from any locally installed models
 
 When using Ollama, you can select from your locally installed models and customize the API URL if needed.
 
 ## LLM Features
 
-The tool supports several LLM-powered features using either Anthropic's Claude model (cloud) or Ollama models (local):
+The tool supports several LLM-powered features using Anthropic's Claude models, OpenAI's GPT models, or Ollama models (local):
 
 ### Document Summarization
 
@@ -140,11 +173,21 @@ Have a natural conversation about your project, with the AI maintaining context 
 
 ### Streaming Responses
 
-All AI interactions provide real-time streaming responses, showing the AI's answer as it's being generated instead of waiting for the complete response.
+AI interactions can be used in two modes:
+- Default mode: Shows a loading spinner while generating responses with full code highlighting
+- Streaming mode: Shows real-time responses as they're being generated (use `--stream` flag)
+
+```bash
+# Default mode with loading spinner and code highlighting
+adist query "How does authentication work?"
+
+# Streaming mode with real-time responses
+adist query "How does authentication work?" --stream
+```
 
 ## Setting Up
 
-You have two options for using LLM features:
+You have three options for using LLM features:
 
 ### Option 1: Anthropic Claude (Cloud)
 
@@ -153,12 +196,24 @@ You have two options for using LLM features:
    export ANTHROPIC_API_KEY='your-api-key-here'
    ```
 
-2. (Optional) Configure to use Anthropic explicitly:
+2. Configure to use Anthropic and select your preferred model:
    ```bash
    adist llm-config
    ```
 
-### Option 2: Ollama (Local)
+### Option 2: OpenAI (Cloud)
+
+1. Set your OpenAI API key in the environment:
+   ```bash
+   export OPENAI_API_KEY='your-api-key-here'
+   ```
+
+2. Configure to use OpenAI and select your preferred model:
+   ```bash
+   adist llm-config
+   ```
+
+### Option 3: Ollama (Local)
 
 1. Install Ollama from [ollama.com/download](https://ollama.com/download)
 
@@ -209,13 +264,29 @@ The tool stores its configuration in:
 
 ## Recent Updates
 
+- Improved chat and query commands with better code highlighting in non-streaming mode (default)
+- Added `--stream` flag to chat and query commands for real-time streaming responses
+- Added support for OpenAI models (GPT-4o, GPT-4 Turbo, GPT-3.5 Turbo)
+- Added support for all Claude 3 models (Opus, Sonnet, Haiku)
+- Added block-based indexing as the default method for faster and more precise document analysis
+- Made block-based search the default search method for better contextual understanding
+- Legacy indexing and search methods are still available under `legacy-reindex` and `legacy-get`
 - Added support for Ollama to run LLM features locally without an API key
-- Added LLM provider configuration command for easy switching between Anthropic and Ollama
-- Added real-time streaming responses for chat and query commands
-- Improved context caching for faster repeated queries on similar topics
+- Added LLM provider configuration command for easy switching between Anthropic, OpenAI, and Ollama
 - Enhanced document relevance ranking for more accurate results
 - Added automatic related document discovery for richer context
 - Optimized token usage to reduce API costs
+
+## Block-Based Indexing
+
+The latest version of adist uses block-based indexing by default, which:
+
+1. Splits documents into semantic blocks (functions, sections, paragraphs)
+2. Indexes each block individually with its metadata
+3. Allows for more precise searching and better context understanding
+4. Improves AI interactions by providing more relevant code snippets
+
+The previous full-document indexing method is still available as `legacy-reindex` and `legacy-get` commands.
 
 ## License
 

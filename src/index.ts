@@ -30,6 +30,8 @@ async function main() {
     const { llmConfigCommand } = await import('./commands/llm-config.js');
     const { viewCommand } = await import('./commands/view.js');
     const { pathsCommand } = await import('./commands/paths.js');
+    const { blockReindexCommand } = await import('./commands/block-reindex.js');
+    const { blockGetCommand } = await import('./commands/block-get.js');
 
     // Import command handlers
     const init = async (projectName: string) => {
@@ -42,7 +44,7 @@ async function main() {
       return list(options);
     };
 
-    const switchProject = async (projectName: string) => {
+    const switchProject = async (projectName?: string) => {
       const { switchProject } = await import('./commands/switch.js');
       return switchProject(projectName);
     };
@@ -70,8 +72,8 @@ async function main() {
 
     // Switch to a different project
     program
-      .command('switch <projectName>')
-      .description('Switch to a specific project by name')
+      .command('switch [projectName]')
+      .description('Switch to a specific project by name or select from a list')
       .action(switchProject);
 
     // List all projects
@@ -81,11 +83,19 @@ async function main() {
       .option('-d, --debug', 'Show debug information')
       .action((options) => list(options));
 
-    // Search for documents
-    program.addCommand(getCommand);
-
-    // Reindex command with options
-    program.addCommand(reindexCommand);
+    // Rename the original get command to legacy-get and reindex to legacy-reindex
+    const legacyGetCommand = getCommand.name('legacy-get');
+    const legacyReindexCommand = reindexCommand.name('legacy-reindex');
+    
+    // Rename block commands to use the standard command names
+    const defaultGetCommand = blockGetCommand.name('get');
+    const defaultReindexCommand = blockReindexCommand.name('reindex');
+    
+    // Add commands to program
+    program.addCommand(defaultGetCommand); // Block-based get as default 'get'
+    program.addCommand(defaultReindexCommand); // Block-based reindex as default 'reindex'
+    program.addCommand(legacyGetCommand); // Original get as 'legacy-get'
+    program.addCommand(legacyReindexCommand); // Original reindex as 'legacy-reindex'
 
     // Summary command
     program.addCommand(summaryCommand);
