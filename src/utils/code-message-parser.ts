@@ -1,4 +1,4 @@
-import { highlightCode } from './code-highlighter.js';
+import { highlightCode, terminalHighlightCode } from './code-highlighter.js';
 import pc from 'picocolors';
 
 /**
@@ -98,55 +98,103 @@ export function processStreamingChunk(
   updatedInCodeBlock: boolean 
 } {
   // Add current chunk to buffer
-  const updatedBuffer = buffer + chunk;
-  let updatedInCodeBlock = inCodeBlock;
+  let updatedBuffer = buffer + chunk;
   let processedChunk = chunk;
   
-  // Check for code block markers
-  const backtickCount = (chunk.match(/```/g) || []).length;
+  // Check if we've entered or exited a code block
+  const codeBlockStart = '```';
+  let updatedInCodeBlock = inCodeBlock;
   
-  // If we're toggling code block state
-  if (backtickCount % 2 !== 0) {
-    updatedInCodeBlock = !inCodeBlock;
-  }
+  // Count backtick markers to determine if we're in a code block
+  const backtickIndices = [...updatedBuffer.matchAll(/```/g)].map(match => match.index ?? 0);
+  updatedInCodeBlock = backtickIndices.length % 2 !== 0;
   
-  // If we've completed a code block, process the entire block
+  // When we transition out of a code block, process the entire block
   if (inCodeBlock && !updatedInCodeBlock) {
-    // Extract the completed code block from the buffer
+    // Extract and process the completed code block
     const codeBlockRegex = /```([a-zA-Z0-9_]*)\n([\s\S]*?)```/g;
     const lastCodeBlockMatch = [...updatedBuffer.matchAll(codeBlockRegex)].pop();
     
     if (lastCodeBlockMatch) {
       const [fullMatch, language, code] = lastCodeBlockMatch;
-      const highlightedCode = highlightCode(code, language || undefined);
+      
+      // Detect language from first line if not specified in the opening backticks
+      let effectiveLanguage = language;
+      if (!effectiveLanguage && code.trim()) {
+        // Check first line for common language patterns
+        const firstLine = code.split('\n')[0].trim();
+        const secondLine = code.split('\n')[1]?.trim() || '';
+        const thirdLine = code.split('\n')[2]?.trim() || '';
+        
+        // More comprehensive Go detection
+        if (firstLine.startsWith('package ') || 
+            code.includes('func ') || 
+            (code.includes('type ') && code.includes('struct')) ||
+            firstLine.includes('import') && (secondLine.includes('"') || thirdLine.includes('"'))) {
+          effectiveLanguage = 'go';
+        } else if (firstLine.includes('function ') || 
+                  firstLine.includes('const ') || 
+                  firstLine.includes('let ') ||
+                  firstLine.includes('import ')) {
+          effectiveLanguage = 'javascript';
+        } else if (firstLine.startsWith('def ') || 
+                  firstLine.startsWith('class ') ||
+                  firstLine.startsWith('import ')) {
+          effectiveLanguage = 'python';
+        }
+      }
+      
+      // Apply syntax highlighting with our enhanced terminal highlighter
+      const highlightedCode = terminalHighlightCode(code, effectiveLanguage || undefined);
       
       // Replace the code block in the buffer with the highlighted version
-      const highlightedBlock = '```' + (language ? language + '\n' : '\n') + highlightedCode + '```';
       const startIndex = updatedBuffer.lastIndexOf(fullMatch);
       const beforeBlock = updatedBuffer.substring(0, startIndex);
       const afterBlock = updatedBuffer.substring(startIndex + fullMatch.length);
       
-      // Update the buffer with the highlighted code
-      const newBuffer = beforeBlock + highlightedBlock + afterBlock;
+      // Format for terminal display with enhanced styling
+      const formattedBlock = '\n' + pc.dim('```' + (effectiveLanguage || '')) + '\n' + 
+                            highlightedCode + 
+                            '\n' + pc.dim('```') + '\n';
       
-      // Replace the chunk with the highlighted portion
-      processedChunk = chunk.replace(code, highlightedCode);
+      // Update the buffer with the highlighted code
+      updatedBuffer = beforeBlock + formattedBlock + afterBlock;
+      
+      // Calculate which part of the formatted block should be in the current chunk output
+      const chunkStartInBuffer = buffer.length;
+      const chunkEndInBuffer = buffer.length + chunk.length;
+      
+      // Extract the portion of the buffer that corresponds to the current chunk
+      processedChunk = updatedBuffer.substring(chunkStartInBuffer, chunkEndInBuffer);
       
       return {
         processedChunk,
-        updatedBuffer: newBuffer,
+        updatedBuffer,
         updatedInCodeBlock: false
       };
     }
   }
   
-  // If we're not in a code block, apply markdown highlighting
+  // Handle partial code blocks during streaming
+  if (updatedInCodeBlock) {
+    // Inside a code block, just preserve the content for later processing
+    return {
+      processedChunk,
+      updatedBuffer,
+      updatedInCodeBlock
+    };
+  }
+  
+  // If we're not in a code block, apply markdown formatting as usual
   if (!inCodeBlock && !updatedInCodeBlock) {
-    // Apply line-based markdown formatting for easier chunking
+    // Apply line-based markdown formatting for more reliable streaming
     const lines = processedChunk.split('\n');
     
     for (let i = 0; i < lines.length; i++) {
       let line = lines[i];
+      
+      // Skip empty lines or lines that might be part of code blocks
+      if (!line.trim() || line.trim().startsWith('```')) continue;
       
       // Bold text
       line = line.replace(/\*\*([^*]+)\*\*/g, (_, text) => pc.bold(text));
@@ -233,9 +281,37 @@ export function formatMarkdownDocument(markdown: string): string {
   // Now format each segment appropriately
   const formattedSegments = segments.map(segment => {
     if (segment.type === 'code') {
-      return '```' + (segment.language ? segment.language + '\n' : '\n') + 
-             highlightCode(segment.content, segment.language) + 
-             '```';
+      // If language isn't specified, try to detect it from the content
+      let effectiveLanguage = segment.language;
+      if (!effectiveLanguage && segment.content.trim()) {
+        // Check content patterns to detect common languages
+        const firstLine = segment.content.split('\n')[0].trim();
+        
+        if (firstLine.startsWith('package ') || 
+            segment.content.includes('func ') || 
+            (segment.content.includes('type ') && segment.content.includes('struct'))) {
+          effectiveLanguage = 'go';
+        } else if (firstLine.includes('function ') || 
+                  firstLine.includes('const ') || 
+                  firstLine.includes('let ') ||
+                  firstLine.includes('import ')) {
+          effectiveLanguage = 'javascript';
+        } else if (firstLine.startsWith('def ') || 
+                  firstLine.startsWith('class ') ||
+                  firstLine.startsWith('import ')) {
+          effectiveLanguage = 'python';
+        }
+      }
+      
+      // Format code with proper syntax highlighting for terminal display
+      // Use our direct highlighter for more reliable terminal output
+      const highlightedCode = terminalHighlightCode(segment.content, effectiveLanguage);
+      
+      // Clearly mark code blocks with styled delimiters for better visibility
+      const language = effectiveLanguage || segment.language || '';
+      return '\n' + pc.dim('```' + language) + '\n' + 
+             highlightedCode + 
+             '\n' + pc.dim('```') + '\n';
     } else {
       // Format text with markdown styles
       let text = segment.content;
@@ -243,6 +319,9 @@ export function formatMarkdownDocument(markdown: string): string {
       // Process text line by line for better handling of headers and lists
       const lines = text.split('\n');
       const formattedLines = lines.map(line => {
+        // Skip empty lines
+        if (!line.trim()) return line;
+        
         // Bold text
         line = line.replace(/\*\*([^*]+)\*\*/g, (_, content) => pc.bold(content));
         

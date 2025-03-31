@@ -1,4 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 import pc from 'picocolors';
 import config from '../config.js';
 
@@ -9,7 +9,7 @@ interface SummaryResult {
   queryComplexity?: 'low' | 'medium' | 'high';
 }
 
-// New interface for cached context
+// Interface for cached context
 interface ContextCache {
   contextContent: string;
   relevantDocuments: { content: string; path: string }[];
@@ -17,15 +17,15 @@ interface ContextCache {
   topicId: string;
 }
 
-export class AnthropicService {
-  private client: Anthropic;
-  private model: string = 'claude-3-sonnet-20240229';
+export class OpenAIService {
+  private client: OpenAI;
+  private model: string = 'gpt-4o';
   // Add a context cache to store contexts by project and topic
   private contextCache: Map<string, ContextCache> = new Map();
   // Timeout for cache items in milliseconds (default: 30 minutes)
   private cacheTimeout: number = 30 * 60 * 1000;
   // Maximum combined context length to prevent hitting token limits
-  private maxContextLength: number = 60000;
+  private maxContextLength: number = 50000;
   
   // Markdown formatting system message
   private markdownFormatSystemMessage: string = `
@@ -42,12 +42,12 @@ Please format your responses using proper Markdown formatting:
 Your response MUST be consistently formatted in Markdown throughout.
 `;
 
-  constructor(model: string = 'claude-3-sonnet-20240229') {
-    if (!process.env.ANTHROPIC_API_KEY) {
-      throw new Error('ANTHROPIC_API_KEY environment variable is required');
+  constructor(model: string = 'gpt-4o') {
+    if (!process.env.OPENAI_API_KEY) {
+      throw new Error('OPENAI_API_KEY environment variable is required');
     }
-    this.client = new Anthropic({
-      apiKey: process.env.ANTHROPIC_API_KEY
+    this.client = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY
     });
     this.model = model;
   }
@@ -55,7 +55,7 @@ Your response MUST be consistently formatted in Markdown throughout.
   // Method to identify the topic of a query
   private async identifyTopic(query: string): Promise<string> {
     try {
-      const response = await this.client.messages.create({
+      const response = await this.client.chat.completions.create({
         model: this.model,
         max_tokens: 50,
         messages: [{
@@ -64,7 +64,7 @@ Your response MUST be consistently formatted in Markdown throughout.
         }]
       });
       
-      return response.content[0].text.trim().toLowerCase();
+      return response.choices[0].message.content?.trim().toLowerCase() || query.toLowerCase().split(/\s+/)[0];
     } catch (error) {
       console.error(pc.red('Error identifying topic:'), error);
       // If we can't identify the topic, use the query itself as a fallback
@@ -123,7 +123,7 @@ Your response MUST be consistently formatted in Markdown throughout.
     return cached;
   }
 
-  // New method to find related contexts
+  // Method to find related contexts
   private findRelatedContexts(projectId: string, topicId: string): ContextCache[] {
     const relatedContexts: ContextCache[] = [];
     const topicWords = topicId.toLowerCase().split(/\s+/);
@@ -149,7 +149,7 @@ Your response MUST be consistently formatted in Markdown throughout.
     return relatedContexts;
   }
 
-  // New method to merge related contexts
+  // Method to merge related contexts
   private mergeRelatedContexts(contexts: ContextCache[]): ContextCache | null {
     if (contexts.length === 0) return null;
     
@@ -337,7 +337,7 @@ Your response MUST be consistently formatted in Markdown throughout.
     return processedContexts.join('\n');
   }
 
-  // New method to calculate document relevance
+  // Method to calculate document relevance
   private calculateDocumentRelevance(content: string, queryComplexity: 'low' | 'medium' | 'high'): number {
     // Base score starts at 0.5
     let score = 0.5;
@@ -371,12 +371,13 @@ Your response MUST be consistently formatted in Markdown throughout.
 
   async summarizeFile(content: string, filePath: string): Promise<SummaryResult> {
     try {
-      const response = await this.client.messages.create({
+      const response = await this.client.chat.completions.create({
         model: this.model,
         max_tokens: 1000,
-        messages: [{
-          role: 'user',
-          content: `You are a helpful AI assistant with expertise in software development. You are analyzing a code file.
+        messages: [
+          {
+            role: 'system',
+            content: `You are a helpful AI assistant with expertise in software development. You are analyzing a code file.
 Given a file's content, provide a comprehensive summary of its purpose, key functions, and main components.
 Be specific and concise. Focus on the most important aspects of the code.
 
@@ -389,24 +390,23 @@ Format your response using proper Markdown:
 
 IMPORTANT: Always use syntax highlighting by specifying the language when creating code blocks. 
 For example, use \`\`\`javascript, \`\`\`python, \`\`\`typescript, etc. rather than just \`\`\`. 
-This ensures proper syntax highlighting in the terminal.
-
-FILE: ${filePath}
-
-FILE CONTENT:
-${content}`
-        }]
+This ensures proper syntax highlighting in the terminal.`
+          },
+          {
+            role: 'user',
+            content: `FILE: ${filePath}\n\nFILE CONTENT:\n${content}`
+          }
+        ]
       });
 
       // Calculate cost based on tokens used
-      // Claude 3 Sonnet: $3/million tokens
-      const inputTokens = response.usage?.input_tokens || 0;
-      const outputTokens = response.usage?.output_tokens || 0;
-      const totalTokens = inputTokens + outputTokens;
-      const cost = (totalTokens / 1_000_000) * 3;
+      // GPT-4o pricing: $10/million tokens input, $30/million tokens output
+      const inputTokens = response.usage?.prompt_tokens || 0;
+      const outputTokens = response.usage?.completion_tokens || 0;
+      const cost = ((inputTokens / 1_000_000) * 10) + ((outputTokens / 1_000_000) * 30);
 
       return {
-        summary: response.content[0].text,
+        summary: response.choices[0].message.content || "Failed to generate summary",
         cost
       };
     } catch (error) {
@@ -421,23 +421,28 @@ ${content}`
         .map(({ path, summary }) => `File: ${path}\nSummary: ${summary}\n`)
         .join('\n');
 
-      const response = await this.client.messages.create({
+      const response = await this.client.chat.completions.create({
         model: this.model,
         max_tokens: 1000,
-        messages: [{
-          role: 'user',
-          content: `Please provide a high-level overview of the project based on the following file summaries:\n\n${summaryContent}`
-        }]
+        messages: [
+          {
+            role: 'system',
+            content: `You are a helpful AI assistant with expertise in software development. Your task is to analyze file summaries and provide an overall project summary.`
+          },
+          {
+            role: 'user',
+            content: `Please provide a high-level overview of the project based on the following file summaries:\n\n${summaryContent}`
+          }
+        ]
       });
 
       // Calculate cost based on tokens used
-      const inputTokens = response.usage?.input_tokens || 0;
-      const outputTokens = response.usage?.output_tokens || 0;
-      const totalTokens = inputTokens + outputTokens;
-      const cost = (totalTokens / 1_000_000) * 3;
+      const inputTokens = response.usage?.prompt_tokens || 0;
+      const outputTokens = response.usage?.completion_tokens || 0;
+      const cost = ((inputTokens / 1_000_000) * 10) + ((outputTokens / 1_000_000) * 30);
 
       return {
-        summary: response.content[0].text,
+        summary: response.choices[0].message.content || "Failed to generate overall summary",
         cost
       };
     } catch (error) {
@@ -491,15 +496,8 @@ ${content}`
         }
       }
 
-      let fullResponse = '';
-      let inputTokens = 0;
-      let outputTokens = 0;
-
-      // Base message parameters with markdown formatting instructions
-      const baseParams = {
-        model: this.model,
-        max_tokens: 1000,
-        system: `You are a helpful assistant with access to the following project context. Use this context to provide accurate and relevant answers. If the answer cannot be found in the context, say so. Be concise but informative.
+      // System message with context and formatting instructions
+      const systemMessage = `You are a helpful assistant with access to the following project context. Use this context to provide accurate and relevant answers. If the answer cannot be found in the context, say so. Be concise but informative.
 
 Format your response using proper Markdown:
 1. Use # for main headers, ## for subheaders, and ### for sub-subheaders
@@ -512,64 +510,70 @@ IMPORTANT: Always use syntax highlighting by specifying the language when creati
 For example, use \`\`\`javascript, \`\`\`python, \`\`\`typescript, etc. rather than just \`\`\`. 
 This ensures proper syntax highlighting in the terminal.
 
-Context:\n${contextContent}`,
-        messages: [{
-          role: 'user' as const,
-          content: query
-        }]
-      };
+Context:\n${contextContent}`;
+
+      let fullResponse = '';
+      let cost = 0;
 
       // If streaming is requested, use the streaming API
       if (streamCallback) {
         // Create a streaming message
-        const stream = await this.client.messages.create({
-          ...baseParams,
-          stream: true
+        const stream = await this.client.chat.completions.create({
+          model: this.model,
+          max_tokens: 1000,
+          stream: true,
+          messages: [
+            {
+              role: 'system',
+              content: systemMessage
+            },
+            {
+              role: 'user',
+              content: query
+            }
+          ]
         });
+
+        // Track tokens for cost calculation
+        let inputTokensEstimate = systemMessage.length / 4 + query.length / 4;
+        let outputTokensEstimate = 0;
 
         // Process the stream
         for await (const chunk of stream) {
-          // Extract text content from the stream
-          if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
-            const text = chunk.delta.text;
-            streamCallback(text);
-            fullResponse += text;
+          const content = chunk.choices[0]?.delta?.content || '';
+          if (content) {
+            streamCallback(content);
+            fullResponse += content;
+            outputTokensEstimate += content.length / 4; // Rough estimate
           }
         }
 
-        // For streaming, we need to make an additional non-streaming request to get token usage
-        // This is because the streaming API doesn't provide usage information
-        // We can do this with a minimal request to save tokens
-        const usageResponse = await this.client.messages.create({
-          model: this.model,
-          max_tokens: 1,
-          system: "Be concise.",
-          messages: [{
-            role: 'user' as const,
-            content: query.substring(0, 100) // Just use beginning of query to estimate
-          }]
-        });
-        
-        if (usageResponse.usage) {
-          // This is just an estimate, the actual usage might be different
-          inputTokens = usageResponse.usage.input_tokens;
-          // Scale output tokens based on response length
-          outputTokens = Math.ceil(fullResponse.length / 4); // Rough estimate of tokens
-        }
+        // Calculate estimated cost
+        cost = ((inputTokensEstimate / 1_000_000) * 10) + ((outputTokensEstimate / 1_000_000) * 30);
       } else {
         // Regular non-streaming request
-        const response = await this.client.messages.create(baseParams);
-        fullResponse = response.content[0].text;
-        
-        if (response.usage) {
-          inputTokens = response.usage.input_tokens;
-          outputTokens = response.usage.output_tokens;
-        }
-      }
+        const response = await this.client.chat.completions.create({
+          model: this.model,
+          max_tokens: 1000,
+          messages: [
+            {
+              role: 'system',
+              content: systemMessage
+            },
+            {
+              role: 'user',
+              content: query
+            }
+          ]
+        });
 
-      // Calculate cost based on tokens used
-      const totalTokens = inputTokens + outputTokens;
-      const cost = (totalTokens / 1_000_000) * 3;
+        fullResponse = response.choices[0].message.content || "";
+        
+        // Calculate cost based on tokens used
+        const inputTokens = response.usage?.prompt_tokens || 0;
+        const outputTokens = response.usage?.completion_tokens || 0;
+        cost = ((inputTokens / 1_000_000) * 10) + ((outputTokens / 1_000_000) * 30);
+      }
 
       return {
         summary: fullResponse,
@@ -633,16 +637,6 @@ Context:\n${contextContent}`,
         }
       }
 
-      let fullResponse = '';
-      let inputTokens = 0;
-      let outputTokens = 0;
-
-      // Make sure all messages have the correct type
-      const typedMessages = messages.map(m => ({
-        role: m.role as 'user' | 'assistant',
-        content: m.content
-      }));
-
       // Build system message with highlighting instructions
       const systemPrompt = `You are a helpful assistant with access to the following project context. Use this context to provide accurate and relevant answers. If the answer cannot be found in the context, say so. Be concise but informative.
 
@@ -659,58 +653,60 @@ This ensures proper syntax highlighting in the terminal.
 
 Context:\n${contextContent}`;
 
-      // Base message parameters with markdown formatting instructions
-      const baseParams = {
-        model: this.model,
-        max_tokens: 1000,
-        system: systemPrompt,
-        messages: typedMessages
-      };
+      // Prepare OpenAI chat messages format
+      const chatMessages = [
+        { role: 'system' as const, content: systemPrompt },
+        ...messages.map(msg => ({
+          role: msg.role as 'user' | 'assistant',
+          content: msg.content
+        }))
+      ];
+
+      let fullResponse = '';
+      let cost = 0;
 
       // If streaming is requested, use the streaming API
       if (streamCallback) {
         // Create a streaming message
-        const stream = await this.client.messages.create({
-          ...baseParams,
-          stream: true
+        const stream = await this.client.chat.completions.create({
+          model: this.model,
+          stream: true,
+          messages: chatMessages
         });
+
+        // Track tokens for cost calculation (estimate)
+        let inputTokensEstimate = systemPrompt.length / 4;
+        messages.forEach(msg => {
+          inputTokensEstimate += msg.content.length / 4; // Rough estimate
+        });
+        let outputTokensEstimate = 0;
 
         // Process the stream
         for await (const chunk of stream) {
-          // Extract text content from the stream
-          if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
-            const text = chunk.delta.text;
-            streamCallback(text);
-            fullResponse += text;
+          const content = chunk.choices[0]?.delta?.content || '';
+          if (content) {
+            streamCallback(content);
+            fullResponse += content;
+            outputTokensEstimate += content.length / 4; // Rough estimate
           }
         }
 
-        // For streaming, we need to estimate token usage
-        // This is because the streaming API doesn't provide usage information
-        // We're using a rough estimate based on character count
-        const charCount = fullResponse.length;
-        // Rough estimate of tokens (4 chars per token on average)
-        outputTokens = Math.ceil(charCount / 4);
-        
-        // Estimate input tokens from message length
-        const inputChars = messages.reduce((sum, msg) => sum + msg.content.length, 0);
-        inputTokens = Math.ceil(inputChars / 4) + 
-                     // Add estimated tokens for system message
-                     Math.ceil(contextContent.length / 4);
+        // Calculate estimated cost
+        cost = ((inputTokensEstimate / 1_000_000) * 10) + ((outputTokensEstimate / 1_000_000) * 30);
       } else {
         // Regular non-streaming request
-        const response = await this.client.messages.create(baseParams);
-        fullResponse = response.content[0].text;
-        
-        if (response.usage) {
-          inputTokens = response.usage.input_tokens;
-          outputTokens = response.usage.output_tokens;
-        }
-      }
+        const response = await this.client.chat.completions.create({
+          model: this.model,
+          messages: chatMessages
+        });
 
-      // Calculate cost based on tokens used
-      const totalTokens = inputTokens + outputTokens;
-      const cost = (totalTokens / 1_000_000) * 3;
+        fullResponse = response.choices[0].message.content || '';
+        
+        // Calculate cost based on tokens used
+        const inputTokens = response.usage?.prompt_tokens || 0;
+        const outputTokens = response.usage?.completion_tokens || 0;
+        cost = ((inputTokens / 1_000_000) * 10) + ((outputTokens / 1_000_000) * 30);
+      }
 
       return {
         summary: fullResponse,
@@ -723,7 +719,7 @@ Context:\n${contextContent}`;
       throw error;
     }
   }
-  
+
   // Utility method to get similar contexts based on a topic
   async getSimilarContexts(projectId: string, topic: string): Promise<string[]> {
     const similarTopics: string[] = [];
@@ -769,20 +765,23 @@ Context:\n${contextContent}`;
     }
     
     try {
-      // If no markdown detected, use Claude to format it
-      const response = await this.client.messages.create({
+      // If no markdown detected, use GPT to format it
+      const response = await this.client.chat.completions.create({
         model: this.model,
         max_tokens: 1500,
-        system: this.markdownFormatSystemMessage,
-        messages: [{
-          role: 'user',
-          content: `Please convert the following text to properly formatted Markdown without changing any meaning or content:
-
-${text}`
-        }]
+        messages: [
+          {
+            role: 'system',
+            content: this.markdownFormatSystemMessage
+          },
+          {
+            role: 'user',
+            content: `Please convert the following text to properly formatted Markdown without changing any meaning or content:\n\n${text}`
+          }
+        ]
       });
       
-      return response.content[0].text;
+      return response.choices[0].message.content || text;
     } catch (error) {
       console.error(pc.yellow('Error formatting as markdown:'), error);
       // If formatting fails, return the original text

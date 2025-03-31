@@ -121,13 +121,21 @@ adist llm-config
 
 Configure which LLM provider to use:
 - Anthropic Claude (cloud-based, requires API key)
+  - Claude 3 Opus 
+  - Claude 3 Sonnet 
+  - Claude 3 Haiku
+- OpenAI (cloud-based, requires API key)
+  - GPT-4o 
+  - GPT-4 Turbo
+  - GPT-3.5 Turbo
 - Ollama (run locally, no API key needed)
+  - Choose from any locally installed models
 
 When using Ollama, you can select from your locally installed models and customize the API URL if needed.
 
 ## LLM Features
 
-The tool supports several LLM-powered features using either Anthropic's Claude model (cloud) or Ollama models (local):
+The tool supports several LLM-powered features using Anthropic's Claude models, OpenAI's GPT models, or Ollama models (local):
 
 ### Document Summarization
 
@@ -147,7 +155,7 @@ All AI interactions provide real-time streaming responses, showing the AI's answ
 
 ## Setting Up
 
-You have two options for using LLM features:
+You have three options for using LLM features:
 
 ### Option 1: Anthropic Claude (Cloud)
 
@@ -156,12 +164,24 @@ You have two options for using LLM features:
    export ANTHROPIC_API_KEY='your-api-key-here'
    ```
 
-2. (Optional) Configure to use Anthropic explicitly:
+2. Configure to use Anthropic and select your preferred model:
    ```bash
    adist llm-config
    ```
 
-### Option 2: Ollama (Local)
+### Option 2: OpenAI (Cloud)
+
+1. Set your OpenAI API key in the environment:
+   ```bash
+   export OPENAI_API_KEY='your-api-key-here'
+   ```
+
+2. Configure to use OpenAI and select your preferred model:
+   ```bash
+   adist llm-config
+   ```
+
+### Option 3: Ollama (Local)
 
 1. Install Ollama from [ollama.com/download](https://ollama.com/download)
 
@@ -212,11 +232,13 @@ The tool stores its configuration in:
 
 ## Recent Updates
 
+- Added support for OpenAI models (GPT-4o, GPT-4 Turbo, GPT-3.5 Turbo)
+- Added support for all Claude 3 models (Opus, Sonnet, Haiku)
 - Added block-based indexing as the default method for faster and more precise document analysis
 - Made block-based search the default search method for better contextual understanding
 - Legacy indexing and search methods are still available under `legacy-reindex` and `legacy-get`
 - Added support for Ollama to run LLM features locally without an API key
-- Added LLM provider configuration command for easy switching between Anthropic and Ollama
+- Added LLM provider configuration command for easy switching between Anthropic, OpenAI, and Ollama
 - Added real-time streaming responses for chat and query commands
 - Improved context caching for faster repeated queries on similar topics
 - Enhanced document relevance ranking for more accurate results

@@ -650,6 +650,10 @@ Format your response using proper Markdown:
 4. Use \`code\` for inline code references
 5. Use bullet lists with * or - and numbered lists with 1., 2., etc.
 
+IMPORTANT: Always use syntax highlighting by specifying the language when creating code blocks. 
+For example, use \`\`\`javascript, \`\`\`python, \`\`\`typescript, etc. rather than just \`\`\`. 
+This ensures proper syntax highlighting in the terminal.
+
 CONTEXT:
 ${contextContent}
 

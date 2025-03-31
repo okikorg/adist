@@ -132,10 +132,6 @@ async function main() {
       .command('remove-project-id <projectId>')
       .description('Remove a project by its ID (for troubleshooting)')
       .action(removeProjectByIdCmd);
-
-    // Test headings command (for development/debugging)
-    const { testHeadingsCommand } = await import('./commands/test-headings.js');
-    program.addCommand(testHeadingsCommand);
   }
 
   // Parse command line arguments

@@ -38,6 +38,7 @@
     "mermaid": "^10.9.0",
     "node-fetch": "^3.3.2",
     "node-notifier": "^10.0.1",
+    "openai": "^4.90.0",
     "picocolors": "^1.1.1",
     "prompts": "^2.4.2",
     "remark-gfm": "^4.0.1",

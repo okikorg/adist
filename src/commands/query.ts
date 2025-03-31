@@ -225,6 +225,36 @@ export const queryCommand = new Command('query')
               startedStreaming = true;
             }
             
+            // Try to detect code blocks and their language
+            const isFirstChunk = responseBuffer === '';
+            let detectedLanguage = null;
+            
+            // Check for code blocks with language indicators
+            if (isFirstChunk && chunk.includes('```') && !chunk.includes('```\n```')) {
+              if (chunk.includes('```go') || 
+                  (chunk.includes('```') && (
+                    chunk.includes('func ') || 
+                    chunk.includes('type ') || 
+                    chunk.includes('package ')
+                  ))) {
+                detectedLanguage = 'go';
+              } else if (chunk.includes('```javascript') || 
+                        chunk.includes('```typescript') ||
+                        (chunk.includes('```') && (
+                          chunk.includes('function ') || 
+                          chunk.includes('const ') || 
+                          chunk.includes('let ')
+                        ))) {
+                detectedLanguage = 'javascript';
+              } else if (chunk.includes('```python') ||
+                        (chunk.includes('```') && (
+                          chunk.includes('def ') || 
+                          chunk.includes('class ')
+                        ))) {
+                detectedLanguage = 'python';
+              }
+            }
+            
             // Process the chunk with syntax highlighting for code blocks
             const { processedChunk, updatedBuffer, updatedInCodeBlock } = 
               processStreamingChunk(chunk, responseBuffer, inCodeBlock);
@@ -243,6 +273,7 @@ export const queryCommand = new Command('query')
           process.stdout.write('\n');
         } else {
           // Fallback if streaming didn't work
+          // Apply enhanced syntax highlighting using our improved formatter
           const highlightedResponse = formatMarkdownDocument(response.summary);
           console.log(highlightedResponse);
         }

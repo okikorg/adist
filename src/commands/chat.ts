@@ -72,7 +72,7 @@ export const chatCommand = new Command('chat')
         console.log(pc.bold(pc.cyan('Chat Session Started')));
         console.log(`${pc.bold('Project:')} ${pc.cyan(project.name)}`);
         console.log(pc.dim('Type "/help" to see available commands'));
-
+        
         // Initialize chat interface
         const rl = readline.createInterface({
           input: process.stdin,
@@ -443,6 +443,41 @@ export const chatCommand = new Command('chat')
               }
               
               // Process the chunk with syntax highlighting for code blocks
+              // If it's the first chunk, check if it might be part of a code block
+              const isFirstChunk = responseBuffer === '';
+              let detectedLanguage = null;
+              
+              // Try to detect if this is the start of a Go code block
+              if (isFirstChunk && chunk.includes('```') && !chunk.includes('```\n```')) {
+                if (chunk.includes('```go') || 
+                    (chunk.includes('```') && (
+                      chunk.includes('func ') || 
+                      chunk.includes('type ') || 
+                      chunk.includes('package ')
+                    ))) {
+                  detectedLanguage = 'go';
+                } else if (chunk.includes('```javascript') || 
+                          chunk.includes('```typescript') ||
+                          (chunk.includes('```') && (
+                            chunk.includes('function ') || 
+                            chunk.includes('const ') || 
+                            chunk.includes('let ')
+                          ))) {
+                  detectedLanguage = 'javascript';
+                } else if (chunk.includes('```python') ||
+                          (chunk.includes('```') && (
+                            chunk.includes('def ') || 
+                            chunk.includes('class ')
+                          ))) {
+                  detectedLanguage = 'python';
+                }
+                
+                // Log detected language for debugging
+                if (detectedLanguage && showDebugInfo) {
+                  console.log(pc.dim(`[Detected language: ${detectedLanguage}]`));
+                }
+              }
+              
               const { processedChunk, updatedBuffer, updatedInCodeBlock } = 
                 processStreamingChunk(chunk, responseBuffer, inCodeBlock);
               
@@ -472,7 +507,7 @@ export const chatCommand = new Command('chat')
               }
             }
             
-            // Apply syntax highlighting to code blocks in the response
+            // Apply syntax highlighting to code blocks in the response using our enhanced formatter
             const highlightedResponse = formatMarkdownDocument(response.summary);
             console.log(highlightedResponse);
           }
