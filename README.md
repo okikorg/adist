@@ -4,6 +4,14 @@ A powerful CLI tool for indexing, searching, and having AI-powered conversations
 
 Developed by [okik.ai](https://okik.ai).
 
+## Contributing
+
+Contributions are welcome! Feel free to submit issues and pull requests to help improve Adist.
+
+The repository is hosted at [github.com/okikorg/adist](https://github.com/okikorg/adist.git).
+
+
+
 > **⚠️ IMPORTANT**: This is an active development project. Breaking changes may occur between versions as we continue to improve the tool. Please check the changelog when updating.
 
 ## Features
@@ -51,7 +59,13 @@ Search for documents in the current project using natural language queries.
 adist query "<question>"
 ```
 
-Ask questions about your project and get AI-powered answers with real-time streaming responses. The AI analyzes relevant documents from your codebase to provide contextual answers.
+Ask questions about your project and get AI-powered answers. The AI analyzes relevant documents from your codebase to provide contextual answers with proper code highlighting.
+
+For real-time streaming responses (note that code highlighting may be limited):
+
+```bash
+adist query "<question>" --stream
+```
 
 ### Chat with AI About Your Project
 
@@ -62,10 +76,18 @@ adist chat
 Start an interactive chat session with AI about your project. This mode provides:
 - Persistent conversation history within the session
 - Context awareness across multiple questions
-- Real-time streaming responses
+- Code syntax highlighting for better readability
 - Automatic retrieval of relevant documents for each query
 
-Type `exit` to end the chat session.
+By default, chat mode displays a loading spinner while generating responses. For real-time streaming responses, use:
+
+```bash
+adist chat --stream
+```
+
+Note that code highlighting may be limited in streaming mode.
+
+Type `/exit` to end the chat session.
 
 ### Switch Projects
 
@@ -151,7 +173,17 @@ Have a natural conversation about your project, with the AI maintaining context 
 
 ### Streaming Responses
 
-All AI interactions provide real-time streaming responses, showing the AI's answer as it's being generated instead of waiting for the complete response.
+AI interactions can be used in two modes:
+- Default mode: Shows a loading spinner while generating responses with full code highlighting
+- Streaming mode: Shows real-time responses as they're being generated (use `--stream` flag)
+
+```bash
+# Default mode with loading spinner and code highlighting
+adist query "How does authentication work?"
+
+# Streaming mode with real-time responses
+adist query "How does authentication work?" --stream
+```
 
 ## Setting Up
 
@@ -232,6 +264,8 @@ The tool stores its configuration in:
 
 ## Recent Updates
 
+- Improved chat and query commands with better code highlighting in non-streaming mode (default)
+- Added `--stream` flag to chat and query commands for real-time streaming responses
 - Added support for OpenAI models (GPT-4o, GPT-4 Turbo, GPT-3.5 Turbo)
 - Added support for all Claude 3 models (Opus, Sonnet, Haiku)
 - Added block-based indexing as the default method for faster and more precise document analysis
@@ -239,8 +273,6 @@ The tool stores its configuration in:
 - Legacy indexing and search methods are still available under `legacy-reindex` and `legacy-get`
 - Added support for Ollama to run LLM features locally without an API key
 - Added LLM provider configuration command for easy switching between Anthropic, OpenAI, and Ollama
-- Added real-time streaming responses for chat and query commands
-- Improved context caching for faster repeated queries on similar topics
 - Enhanced document relevance ranking for more accurate results
 - Added automatic related document discovery for richer context
 - Optimized token usage to reduce API costs

@@ -8,7 +8,8 @@ import { parseMessageWithCodeHighlighting, parseMessageWithMarkdownHighlighting,
 export const queryCommand = new Command('query')
   .description('Query your project with natural language')
   .argument('<question>', 'The natural language question to ask about your project')
-  .action(async (question: string) => {
+  .option('--stream', 'Enable streaming responses (note: code highlighting may not work properly)')
+  .action(async (question: string, options) => {
     try {
       // Get current project
       const currentProjectId = await config.get('currentProject') as string;
@@ -209,10 +210,29 @@ export const queryCommand = new Command('query')
         
         // Setup for streaming response
         let startedStreaming = false;
+        const useStreaming = options.stream === true;
         
         // For tracking code block state in streaming responses
         let responseBuffer = '';
         let inCodeBlock = false;
+        
+        // Create and start a loading spinner if not streaming
+        let spinnerInterval: NodeJS.Timeout | null = null;
+        let spinnerFrames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        let spinnerIdx = 0;
+        
+        if (!useStreaming) {
+          // Start loading spinner
+          process.stdout.write(pc.cyan(`${spinnerFrames[0]} Generating...`));
+          spinnerInterval = setInterval(() => {
+            spinnerIdx = (spinnerIdx + 1) % spinnerFrames.length;
+            // Clear the current line and write the updated spinner
+            process.stdout.write('\r' + pc.cyan(`${spinnerFrames[spinnerIdx]} Generating...`));
+          }, 80);
+        } else {
+          // Show warning about code highlighting in streaming mode
+          console.log(pc.yellow('Note: Code highlighting may not work properly in streaming mode.'));
+        }
         
         // Get AI response with streaming
         const response = await llmService.queryProject(
@@ -221,6 +241,9 @@ export const queryCommand = new Command('query')
           currentProjectId,
           // Stream callback
           (chunk) => {
+            // Skip streaming output if streaming is not enabled
+            if (!useStreaming) return;
+            
             if (!startedStreaming) {
               startedStreaming = true;
             }
@@ -268,14 +291,26 @@ export const queryCommand = new Command('query')
           }
         );
         
-        // Add a newline after streaming is complete
-        if (startedStreaming) {
+        // Clear the spinner if not streaming
+        if (!useStreaming && spinnerInterval) {
+          clearInterval(spinnerInterval);
+          // Clear the spinner line
+          process.stdout.write('\r' + ' '.repeat(40) + '\r');
+          
+          // Apply syntax highlighting to the complete response
+          try {
+            // Make sure we're properly applying syntax highlighting by parsing the markdown
+            const highlightedResponse = parseMessageWithMarkdownHighlighting(response.summary);
+            process.stdout.write(highlightedResponse);
+            console.log(); // Add an extra newline for spacing
+          } catch (error) {
+            // Fallback to basic formatting if parsing fails
+            console.log(formatMarkdownDocument(response.summary));
+            console.log(); // Add an extra newline for spacing
+          }
+        } else if (startedStreaming) {
+          // If streaming was used, add a newline after it completes
           process.stdout.write('\n');
-        } else {
-          // Fallback if streaming didn't work
-          // Apply enhanced syntax highlighting using our improved formatter
-          const highlightedResponse = formatMarkdownDocument(response.summary);
-          console.log(highlightedResponse);
         }
         
         // Show cost and context info

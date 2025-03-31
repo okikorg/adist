@@ -26,7 +26,8 @@ const SLASH_COMMANDS = {
 
 export const chatCommand = new Command('chat')
   .description('Start an interactive chat session about your project')
-  .action(async () => {
+  .option('--stream', 'Enable streaming responses (note: code highlighting may not work properly)')
+  .action(async (options) => {
     try {
       // Get current project
       const currentProjectId = await config.get('currentProject') as string;
@@ -72,6 +73,9 @@ export const chatCommand = new Command('chat')
         console.log(pc.bold(pc.cyan('Chat Session Started')));
         console.log(`${pc.bold('Project:')} ${pc.cyan(project.name)}`);
         console.log(pc.dim('Type "/help" to see available commands'));
+        if (!options.stream) {
+          console.log(pc.dim('Use "--stream" flag to enable streaming responses (may affect code highlighting)'));
+        }
         
         // Initialize chat interface
         const rl = readline.createInterface({
@@ -106,6 +110,7 @@ export const chatCommand = new Command('chat')
         let lastTopicId = '';
         let isDisplayingResponse = false;
         let showDebugInfo = true;
+        const useStreaming = options.stream === true;
         
         // For tracking code block state in streaming responses
         let responseBuffer = '';
@@ -418,6 +423,36 @@ export const chatCommand = new Command('chat')
             }
           }
           
+          // Create and start a loading spinner if not streaming
+          let spinnerInterval: NodeJS.Timeout | null = null;
+          let spinnerFrames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+          let spinnerIdx = 0;
+          
+          if (!useStreaming) {
+            console.log(pc.bold(pc.cyan('\nAssistant:')));
+            
+            if (results.length === 0) {
+              if (hasSummary) {
+                console.log(pc.cyan('ℹ️ Using project summary as context (no specific code blocks found).'));
+              } else {
+                console.log(pc.yellow('⚠️ No relevant documents found in the project to answer your question.'));
+                console.log(pc.dim('Try reindexing the project with:'));
+                console.log(pc.cyan('  adist reindex -s'));
+              }
+            }
+            
+            // Start loading spinner
+            process.stdout.write(pc.cyan(`${spinnerFrames[0]} Generating...`));
+            spinnerInterval = setInterval(() => {
+              spinnerIdx = (spinnerIdx + 1) % spinnerFrames.length;
+              // Clear the current line and write the updated spinner
+              process.stdout.write('\r' + pc.cyan(`${spinnerFrames[spinnerIdx]} Generating...`));
+            }, 80);
+          } else {
+            // Show warning about code highlighting in streaming mode
+            console.log(pc.yellow('\nNote: Code highlighting may not work properly in streaming mode.'));
+          }
+          
           // Get AI response with the project ID for context caching
           const response = await llmService.chatWithProject(
             messages, 
@@ -425,6 +460,9 @@ export const chatCommand = new Command('chat')
             currentProjectId,
             // Stream callback for real-time output
             async (chunk) => {
+              // Skip streaming output if streaming is not enabled
+              if (!useStreaming) return;
+              
               // Only add the answer header and debug info on the first chunk
               if (!isDisplayingResponse) {
                 console.log(pc.bold(pc.cyan('\nAssistant:')));
@@ -490,26 +528,26 @@ export const chatCommand = new Command('chat')
             }
           );
           
-          // If streaming was used, add a newline after it completes
-          if (isDisplayingResponse) {
-            process.stdout.write('\n');
-          } else {
-            // If streaming wasn't used, display the response normally with code highlighting
-            console.log(pc.bold(pc.cyan('Assistant:')));
+          // Clear the spinner if not streaming
+          if (!useStreaming && spinnerInterval) {
+            clearInterval(spinnerInterval);
+            // Clear the spinner line
+            process.stdout.write('\r' + ' '.repeat(40) + '\r');
             
-            if (results.length === 0) {
-              if (hasSummary) {
-                console.log(pc.cyan('ℹ️ Using project summary as context (no specific code blocks found).'));
-              } else {
-                console.log(pc.yellow('⚠️ No relevant documents found in the project to answer your question.'));
-                console.log(pc.dim('Try reindexing the project with:'));
-                console.log(pc.cyan('  adist reindex -s'));
-              }
+            // Apply syntax highlighting to the complete response
+            try {
+              // Make sure we're properly applying syntax highlighting by parsing the markdown
+              const highlightedResponse = parseMessageWithMarkdownHighlighting(response.summary);
+              process.stdout.write(highlightedResponse);
+              console.log(); // Add an extra newline for spacing
+            } catch (error) {
+              // Fallback to basic formatting if parsing fails
+              console.log(formatMarkdownDocument(response.summary));
+              console.log(); // Add an extra newline for spacing
             }
-            
-            // Apply syntax highlighting to code blocks in the response using our enhanced formatter
-            const highlightedResponse = formatMarkdownDocument(response.summary);
-            console.log(highlightedResponse);
+          } else if (isDisplayingResponse) {
+            // If streaming was used, add a newline after it completes
+            process.stdout.write('\n');
           }
           
           // Add AI response to history
