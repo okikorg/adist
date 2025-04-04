@@ -1,7 +1,6 @@
 import { Command } from 'commander';
 import pc from 'picocolors';
 import config from '../config.js';
-import { searchDocuments } from '../utils/indexer.js';
 import { LLMServiceFactory } from '../utils/llm-service.js';
 import readline from 'readline';
 import { parseMessageWithCodeHighlighting, parseMessageWithMarkdownHighlighting, processStreamingChunk, formatMarkdownDocument } from '../utils/code-message-parser.js';
@@ -592,4 +591,4 @@ export const chatCommand = new Command('chat')
       console.error(pc.bold(pc.red('✘ Error in chat session:')), error instanceof Error ? error.message : String(error));
       process.exit(1);
     }
-  }); 
+  });

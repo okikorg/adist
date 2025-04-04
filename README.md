@@ -17,6 +17,7 @@ The repository is hosted at [github.com/okikorg/adist](https://github.com/okikor
 ## Features
 
 - 🔍 Fast document indexing and semantic searching
+- 🔎 Advanced search operators (AND/OR) for precise queries
 - 📁 Support for multiple projects
 - 🎯 Project-specific search
 - 🧩 Block-based indexing for more precise document analysis
@@ -44,6 +45,7 @@ This will:
 1. Create a new project configuration
 2. Index all supported files in the current directory
 3. Optionally generate LLM summaries if you have the ANTHROPIC_API_KEY set
+4. Create a Cursor rules file (.cursor/rules/adist-rule.mdc) with usage instructions for AI assistants
 
 ### Search Documents
 
@@ -51,7 +53,22 @@ This will:
 adist get "<query>"
 ```
 
-Search for documents in the current project using natural language queries.
+Search for documents in the current project using natural language queries. You can use advanced operators (AND/OR) for more precise searching.
+
+#### Advanced Search Operators
+
+The search functionality supports advanced operators for more precise results:
+
+```bash
+# AND operator - find documents containing both terms
+adist get "authentication AND middleware"
+
+# OR operator - find documents containing either term
+adist get "login OR signin"
+```
+
+- `AND` - All terms must be present in the document
+- `OR` - Any of the terms can be present in the document
 
 ### Query Your Project with AI
 
@@ -145,6 +162,12 @@ adist inspect-file src/app.js -v
 
 # Show full block content
 adist inspect-file src/app.js -c
+
+# Use advanced search with AND operator
+adist get "database AND connection AND pool"
+
+# Use advanced search with OR operator
+adist get "error OR exception OR failure"
 ```
 
 ### View Summaries
@@ -288,6 +311,13 @@ The tool stores its configuration in:
 
 ## Recent Updates
 
+### April 2025
+- Added advanced search operators: 
+  - `AND` operator to find documents containing all specified terms
+  - `OR` operator to find documents containing any of the specified terms
+- Added automatic Cursor rules creation during project initialization to assist AI tools
+
+### March 2025
 - Improved chat and query commands with better code highlighting in non-streaming mode (default)
 - Added `--stream` flag to chat and query commands for real-time streaming responses
 - Added support for OpenAI models (GPT-4o, GPT-4 Turbo, GPT-3.5 Turbo)
@@ -313,6 +343,17 @@ The latest version of adist uses block-based indexing by default, which:
 You can see how files are parsed into blocks using the `inspect-file` command.
 
 The previous full-document indexing method is still available as `legacy-reindex` and `legacy-get` commands.
+
+## Cursor IDE Integration
+
+Adist automatically creates a `.cursor/rules/adist-rule.mdc` file during project initialization. This integration provides:
+
+1. Automatic instructions for AI assistants in Cursor IDE
+2. Commands and examples available directly to the AI when working with your code
+3. Context about advanced search operators and available tools
+4. Improved AI assistance with project-specific knowledge
+
+The rules file helps AI assistants understand how to use adist to search your codebase, providing better answers and more useful suggestions when you're coding.
 
 ## License
 

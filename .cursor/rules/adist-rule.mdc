@@ -1,0 +1,34 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Adist Project: adist
+
+## Project Exploration
+
+This project is indexed with Adist, a semantic search and AI assistant tool.
+
+### For AI assistants
+
+- Use `adist get "query"` to find relevant code
+- Use `adist get "term1 AND term2"` for advanced searching (both terms must match)
+- Use `adist query "question"` to get AI-powered answers
+- Use `adist chat` for interactive conversations about the codebase
+- Use `adist summary` to see project summaries
+- Use `adist inspect-file <file>` to analyze file structure
+- Use `adist list` to show all indexed projects
+- Use `adist switch <projectName>` to switch between projects
+
+### Commands to know
+
+- Initialize: `adist init [projectName]` (use `--force` to override existing project)
+- Search: `adist get "<query>"`
+- Advanced Search: `adist get "term1 AND term2 AND term3"` (all terms must match)
+- Query: `adist query "<question>"`
+- Chat: `adist chat` (use /exit to end session)
+- List projects: `adist list`
+- Switch projects: `adist switch <projectName>`
+- Reindex: `adist reindex`
+
+Adist splits documents into semantic blocks for more precise searching.

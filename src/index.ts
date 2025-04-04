@@ -35,9 +35,9 @@ async function main() {
     const { inspectFileCommand } = await import('./commands/inspect-file.js');
 
     // Import command handlers
-    const init = async (projectName: string) => {
+    const init = async (projectName?: string, options?: { force?: boolean }) => {
       const { init } = await import('./commands/init.js');
-      return init(projectName);
+      return init(projectName, options);
     };
 
     const list = async (options: any) => {
@@ -67,8 +67,9 @@ async function main() {
 
     // Initialize a project
     program
-      .command('init <projectName>')
-      .description('Initialize adist for the current directory')
+      .command('init [projectName]')
+      .description('Initialize adist for the current directory (uses folder name if not specified)')
+      .option('-f, --force', 'Force initialization, overriding existing project with same name')
       .action(init);
 
     // Switch to a different project
@@ -142,13 +143,13 @@ async function main() {
   try {
     await program.parseAsync(process.argv);
   } catch (error) {
-    console.error(pc.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+    console.error(pc.red(`Error: ${error instanceof Error ? error.message : JSON.stringify(error)}`));
     process.exit(1);
   }
 }
 
 // Run the main function
 main().catch(error => {
-  console.error(pc.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+  console.error(pc.red(`Error: ${error instanceof Error ? error.message : JSON.stringify(error)}`));
   process.exit(1);
 });

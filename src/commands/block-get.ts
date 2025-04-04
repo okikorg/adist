@@ -9,8 +9,10 @@ import config from '../config.js';
  * Command for searching with the block-based indexer
  */
 export const blockGetCommand = new Command('block-get')
-  .description('Search for blocks matching a query (default search method)')
-  .argument('<query>', 'The search query')
+  .description('Search for blocks matching a query (default search method). Supports advanced operators:\n' +
+               '  - AND: "theme style AND color palette" - finds blocks containing both terms\n' +
+               '  - OR: "theme OR style" - finds blocks containing either term')
+  .argument('<query>', 'The search query (use "term1 AND term2" or "term1 OR term2" for advanced searching)')
   .option('-n, --max-results <number>', 'Maximum number of results to show', '10')
   .option('-l, --limit-lines <number>', 'Limit the number of content lines shown per block', '20')
   .action(async (query: string, options: { maxResults?: number; limitLines?: number }) => {
@@ -19,6 +21,15 @@ export const blockGetCommand = new Command('block-get')
       const limitLines = options.limitLines ? parseInt(String(options.limitLines), 10) : 20;
 
       console.log(pc.cyan(`🔍 Searching for blocks matching: ${pc.bold(query)}`));
+
+      // Show what kind of search is being performed
+      if (query.includes(' AND ')) {
+        const terms = query.split(' AND ').map(term => term.trim());
+        console.log(pc.cyan(`📋 Using advanced AND search with ${terms.length} terms`));
+      } else if (query.includes(' OR ')) {
+        const terms = query.split(' OR ').map(term => term.trim());
+        console.log(pc.cyan(`📋 Using advanced OR search with ${terms.length} terms`));
+      }
 
       const searchEngine = new BlockSearchEngine();
       const results = await searchEngine.searchBlocks(query);

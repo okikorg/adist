@@ -21,8 +21,10 @@ const truncateContent = (content: string, maxLines = 15, maxLineLength = 100): s
 };
 
 export const getCommand = new Command('get')
-  .description('Search for documents in the current project using block-based search')
-  .argument('<query>', 'Search query')
+  .description('Search for documents in the current project using block-based search. Supports advanced operators:\n' +
+               '  - AND: "theme style AND color palette" - finds documents containing both terms\n' +
+               '  - OR: "theme OR style" - finds documents containing either term')
+  .argument('<query>', 'Search query (use "term1 AND term2" or "term1 OR term2" for advanced searching)')
   .option('-d, --debug', 'Show debug information')
   .option('-n, --max-results <number>', 'Maximum number of results to show', '10')
   .option('-l, --limit-lines <number>', 'Limit the number of content lines shown per block', '20')
@@ -55,6 +57,15 @@ export const getCommand = new Command('get')
 
       console.log(`${pc.bold('Project:')} ${pc.cyan(project.name)}`);
       console.log(`${pc.bold('Query:')} ${pc.yellow('"' + query + '"')}`);
+      
+      // Show what kind of search is being performed
+      if (query.includes(' AND ')) {
+        const terms = query.split(' AND ').map(term => term.trim());
+        console.log(`${pc.bold('Search type:')} ${pc.magenta('Advanced AND')} (${terms.length} terms)`);
+      } else if (query.includes(' OR ')) {
+        const terms = query.split(' OR ').map(term => term.trim());
+        console.log(`${pc.bold('Search type:')} ${pc.magenta('Advanced OR')} (${terms.length} terms)`);
+      }
 
       // Debug info
       if (options.debug) {

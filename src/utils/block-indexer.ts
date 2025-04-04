@@ -474,9 +474,44 @@ export class BlockSearchEngine {
   }
 
   /**
+   * Parse advanced queries with operators like AND and OR
+   * Example: "theme style AND color palette" or "theme OR style"
+   */
+  private parseAdvancedQuery(query: string): { type: 'AND' | 'OR' | 'SIMPLE', terms: string[] } {
+    // Check if query contains AND operator
+    if (query.includes(' AND ')) {
+      const terms = query.split(' AND ').map(term => term.trim());
+      return { type: 'AND', terms };
+    }
+    
+    // Check if query contains OR operator
+    if (query.includes(' OR ')) {
+      const terms = query.split(' OR ').map(term => term.trim());
+      return { type: 'OR', terms };
+    }
+    
+    // Default to simple query
+    return { type: 'SIMPLE', terms: [query] };
+  }
+
+  /**
    * Perform the search across all documents
    */
   private performSearch(query: string, documents: IndexedDocument[]): SearchResult[] {
+    // Parse advanced query
+    const parsedQuery = this.parseAdvancedQuery(query);
+    
+    // For AND queries, we'll search for each term separately and then combine results
+    if (parsedQuery.type === 'AND' && parsedQuery.terms.length > 1) {
+      return this.performAndSearch(parsedQuery.terms, documents);
+    }
+    
+    // For OR queries, we'll search for each term separately and then combine results
+    if (parsedQuery.type === 'OR' && parsedQuery.terms.length > 1) {
+      return this.performOrSearch(parsedQuery.terms, documents);
+    }
+    
+    // For simple queries, proceed with normal search
     // Normalize query
     const normalizedQuery = query.toLowerCase();
     const queryTerms = this.getQueryTerms(normalizedQuery);
@@ -615,6 +650,204 @@ export class BlockSearchEngine {
     results.sort((a, b) => b.score - a.score);
     
     // Take top results
+    return results.slice(0, 5);
+  }
+
+  /**
+   * Perform an AND search (all terms must match)
+   */
+  private performAndSearch(queries: string[], documents: IndexedDocument[]): SearchResult[] {
+    // Get results for each query term
+    const allResults: Map<string, Map<string, DocumentBlock[]>> = new Map();
+    
+    // For each query term, find matching documents and blocks
+    for (const query of queries) {
+      const normalizedQuery = query.toLowerCase();
+      const queryTerms = this.getQueryTerms(normalizedQuery);
+      const queryVector = this.vectorizeTerms(queryTerms);
+      
+      // Track results for this query term
+      const termResults: Map<string, DocumentBlock[]> = new Map();
+      
+      // Search in each document
+      for (const document of documents) {
+        const blocksById = new Map<string, DocumentBlock>();
+        for (const block of document.blocks) {
+          blocksById.set(block.id, block);
+        }
+        
+        // Score each block
+        const scoredBlocks = document.blocks
+          .map(block => ({
+            block,
+            score: this.scoreBlockWithVector(block, queryTerms, queryVector)
+          }))
+          .filter(({ score }) => score > 0);
+        
+        // If we found matches in this document
+        if (scoredBlocks.length > 0) {
+          // Keep track of the matching blocks for this document
+          termResults.set(
+            document.path, 
+            scoredBlocks.map(({ block }) => block)
+          );
+        }
+      }
+      
+      // Store results for this query term
+      allResults.set(query, termResults);
+    }
+    
+    // Find documents that match ALL query terms
+    const documentScores: Map<string, number> = new Map();
+    const documentBlocks: Map<string, Set<string>> = new Map();
+    
+    // We only want documents that have matches for ALL query terms
+    for (const [document, path] of documents.map(d => [d, d.path] as const)) {
+      // Check if this document has matches for all query terms
+      let matchesAllTerms = true;
+      let totalScore = 0;
+      
+      // For each query term
+      for (const [queryTerm, termResults] of allResults.entries()) {
+        if (!termResults.has(path)) {
+          matchesAllTerms = false;
+          break;
+        }
+        
+        // Add up scores for this document across all terms
+        const blocks = termResults.get(path) || [];
+        blocks.forEach(block => {
+          // Track unique blocks that match
+          if (!documentBlocks.has(path)) {
+            documentBlocks.set(path, new Set());
+          }
+          documentBlocks.get(path)?.add(block.id);
+          
+          // Add to total score
+          totalScore += 1;
+        });
+      }
+      
+      // If this document matches all terms, add it to results
+      if (matchesAllTerms) {
+        documentScores.set(path, totalScore);
+      }
+    }
+    
+    // Convert to search results
+    const results: SearchResult[] = [];
+    
+    // Build a map of blocks by document for quick lookup
+    const blocksByDocument = new Map<string, Map<string, DocumentBlock>>();
+    for (const document of documents) {
+      const blocksMap = new Map<string, DocumentBlock>();
+      for (const block of document.blocks) {
+        blocksMap.set(block.id, block);
+      }
+      blocksByDocument.set(document.path, blocksMap);
+    }
+    
+    // For each matching document
+    for (const [path, score] of documentScores.entries()) {
+      const matchingBlockIds = documentBlocks.get(path) || new Set();
+      const blocksMap = blocksByDocument.get(path);
+      
+      if (!blocksMap) continue;
+      
+      // Get the actual blocks
+      const relevantBlocks: DocumentBlock[] = [];
+      for (const blockId of matchingBlockIds) {
+        const block = blocksMap.get(blockId);
+        if (block) {
+          relevantBlocks.push(block);
+        }
+      }
+      
+      // Add to results
+      if (relevantBlocks.length > 0) {
+        results.push({
+          document: path,
+          blocks: relevantBlocks,
+          score
+        });
+      }
+    }
+    
+    // Sort results by score
+    results.sort((a, b) => b.score - a.score);
+    
+    return results.slice(0, 5);
+  }
+
+  /**
+   * Perform an OR search (any term can match)
+   */
+  private performOrSearch(queries: string[], documents: IndexedDocument[]): SearchResult[] {
+    // Results map to track combined results
+    const documentResults: Map<string, { blocks: Map<string, DocumentBlock>, score: number }> = new Map();
+    
+    // For each query term, find matching documents and blocks
+    for (const query of queries) {
+      const normalizedQuery = query.toLowerCase();
+      const queryTerms = this.getQueryTerms(normalizedQuery);
+      const queryVector = this.vectorizeTerms(queryTerms);
+      
+      // Search in each document
+      for (const document of documents) {
+        const blocksById = new Map<string, DocumentBlock>();
+        for (const block of document.blocks) {
+          blocksById.set(block.id, block);
+        }
+        
+        // Score each block
+        const scoredBlocks = document.blocks
+          .map(block => ({
+            block,
+            score: this.scoreBlockWithVector(block, queryTerms, queryVector)
+          }))
+          .filter(({ score }) => score > 0);
+        
+        // If we found matches in this document
+        if (scoredBlocks.length > 0) {
+          // Get or create the result entry for this document
+          if (!documentResults.has(document.path)) {
+            documentResults.set(document.path, {
+              blocks: new Map(),
+              score: 0
+            });
+          }
+          
+          const docResult = documentResults.get(document.path)!;
+          
+          // Add blocks and update score
+          for (const { block, score } of scoredBlocks) {
+            // Only add the block if it's not already there or has a higher score
+            if (!docResult.blocks.has(block.id) || score > docResult.score) {
+              docResult.blocks.set(block.id, block);
+              docResult.score += score; // Accumulate score across all terms
+            }
+          }
+        }
+      }
+    }
+    
+    // Convert to search results format
+    const results: SearchResult[] = [];
+    
+    for (const [path, { blocks, score }] of documentResults.entries()) {
+      if (blocks.size > 0) {
+        results.push({
+          document: path,
+          blocks: Array.from(blocks.values()),
+          score
+        });
+      }
+    }
+    
+    // Sort results by score
+    results.sort((a, b) => b.score - a.score);
+    
     return results.slice(0, 5);
   }
 
