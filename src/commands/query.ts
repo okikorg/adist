@@ -8,7 +8,7 @@ import { parseMessageWithCodeHighlighting, parseMessageWithMarkdownHighlighting,
 export const queryCommand = new Command('query')
   .description('Query your project with natural language')
   .argument('<question>', 'The natural language question to ask about your project')
-  .option('--stream', 'Enable streaming responses (note: code highlighting may not work properly)')
+  .option('--stream', 'Enable streaming responses (note: code highlighting may not work properly)', false)
   .action(async (question: string, options) => {
     try {
       // Get current project
@@ -26,93 +26,127 @@ export const queryCommand = new Command('query')
         process.exit(1);
       }
 
+      // Get LLM service
+      const llmService = await LLMServiceFactory.getLLMService();
+
       console.log(`${pc.bold('Project:')} ${pc.cyan(project.name)}`);
       console.log(`${pc.bold('Question:')} ${pc.yellow('"' + question + '"')}`);
-
-      // Check if this is a summary-related query
-      const isSummaryQuery = 
-        question.toLowerCase().includes('summary') || 
-        question.toLowerCase().includes('overview') || 
-        question.toLowerCase().includes('describe') ||
-        question.toLowerCase().includes('what is') ||
-        question.toLowerCase().includes("what's") ||
-        question.toLowerCase().includes('what does') ||
-        question.toLowerCase().includes('explain');
-        
-      // Check for explicit summary requests
-      const isExplicitSummaryRequest = 
-        question.toLowerCase() === 'summary' ||
-        question.toLowerCase() === 'what is the summary' ||
-        question.toLowerCase() === "what's the summary" ||
-        question.toLowerCase() === 'project summary' ||
-        question.toLowerCase() === 'show summary' ||
-        question.toLowerCase() === 'show project summary';
-        
-      // For explicit summary requests, show summary directly if available
-      if (isExplicitSummaryRequest && project.hasSummaries) {
-        const projectSummary = await config.get(`summaries.${currentProjectId}.overall`) as string | undefined;
-        
-        if (projectSummary) {
-          console.log(pc.bold(pc.cyan('Project Summary:')));
-          console.log('\n' + projectSummary + '\n');
-          console.log(pc.dim('To view file summaries:'));
-          console.log(pc.cyan('  adist summary --list'));
-          process.exit(0);
-        }
+      
+      if (!options.stream) {
+        console.log(pc.dim('Use "--stream" flag to enable streaming responses (may affect code highlighting)'));
       }
 
-      // Search for relevant documents using block-based search
-      const searchEngine = new BlockSearchEngine();
-      const blockResults = await searchEngine.searchBlocks(question);
-      
-      // Format results for the LLM
-      const results = blockResults.map(result => {
-        // Combine all block contents for the document
-        const content = result.blocks.map(block => {
-          let blockHeader = `--- ${block.type}`;
-          if (block.title) blockHeader += `: ${block.title}`;
-          blockHeader += ` (lines ${block.startLine}-${block.endLine}) ---`;
-          return `${blockHeader}\n${block.content}`;
-        }).join('\n\n');
+      // Add interface for block results
+      interface BlockResult {
+        document: string;
+        blocks: Array<{
+          type: string;
+          title?: string;
+          startLine: number;
+          endLine: number;
+          content: string;
+        }>;
+      }
+
+      // Add interface for query context optimization
+      interface QueryContext {
+        results: { path: string; content: string }[];
+        hasSummary: boolean;
+        overallSummary?: string;
+      }
+
+      // Add new function to optimize query context
+      const optimizeQueryContext = async (
+        question: string,
+        projectId: string,
+        project: { hasSummaries?: boolean }
+      ): Promise<QueryContext> => {
+        // Check if this is a summary-related query
+        const isSummaryQuery = 
+          question.toLowerCase().includes('summary') || 
+          question.toLowerCase().includes('overview') || 
+          question.toLowerCase().includes('describe') ||
+          question.toLowerCase().includes('what is') ||
+          question.toLowerCase().includes("what's") ||
+          question.toLowerCase().includes('what does') ||
+          question.toLowerCase().includes('explain');
+          
+        // Check for explicit summary requests
+        const isExplicitSummaryRequest = 
+          question.toLowerCase() === 'summary' ||
+          question.toLowerCase() === 'what is the summary' ||
+          question.toLowerCase() === "what's the summary" ||
+          question.toLowerCase() === 'project summary' ||
+          question.toLowerCase() === 'show summary' ||
+          question.toLowerCase() === 'show project summary';
+
+        // Search for relevant documents using block-based search
+        const searchEngine = new BlockSearchEngine();
+        const blockResults: BlockResult[] = await searchEngine.searchBlocks(question);
         
+        // Format results from block search
+        const results = blockResults.map(result => {
+          // Combine all block contents for the document
+          const content = result.blocks.map(block => {
+            let blockHeader = `--- ${block.type}`;
+            if (block.title) blockHeader += `: ${block.title}`;
+            blockHeader += ` (lines ${block.startLine}-${block.endLine}) ---`;
+            return `${blockHeader}\n${block.content}`;
+          }).join('\n\n');
+          
+          return {
+            path: result.document,
+            content: content
+          };
+        });
+
+        // Check if we have a project summary available
+        let hasSummary = false;
+        let overallSummary: string | undefined;
+
+        // If it's a summary query or no results were found, check for project summary
+        if ((isSummaryQuery || blockResults.length === 0) && project.hasSummaries) {
+          overallSummary = await config.get(`summaries.${projectId}.overall`) as string | undefined;
+          hasSummary = Boolean(overallSummary);
+          
+          // For summary queries, add the project summary to the results
+          if (isSummaryQuery && hasSummary && overallSummary) {
+            results.push({
+              path: "PROJECT_SUMMARY",
+              content: `--- Project Summary ---\n${overallSummary}`
+            });
+          }
+          
+          // For explicit summary requests, prioritize the summary by making it the only result
+          if (isExplicitSummaryRequest && hasSummary && overallSummary) {
+            // Clear existing results and only use the summary
+            results.length = 0;
+            results.push({
+              path: "PROJECT_SUMMARY",
+              content: `--- Project Summary ---\n${overallSummary}`
+            });
+          }
+        }
+
         return {
-          path: result.document,
-          content: content
+          results,
+          hasSummary,
+          overallSummary
         };
-      });
-      
+      };
+
+      // Inside the action handler, after getting the project:
+      const queryContext = await optimizeQueryContext(question, currentProjectId, project);
+
       // Check if we have a project summary available
-      let hasSummary = false;
-      let overallSummary: string | undefined;
-      
-      // If it's a summary query or no results were found, check for project summary
-      if ((isSummaryQuery || blockResults.length === 0) && project.hasSummaries) {
-        overallSummary = await config.get(`summaries.${currentProjectId}.overall`) as string | undefined;
-        hasSummary = Boolean(overallSummary);
-        
-        // For summary queries, add the project summary to the results
-        if (isSummaryQuery && hasSummary && overallSummary) {
-          results.push({
-            path: "PROJECT_SUMMARY",
-            content: `--- Project Summary ---\n${overallSummary}`
-          });
-        }
-        
-        // For explicit summary requests, prioritize the summary by making it the only result
-        if (isExplicitSummaryRequest && hasSummary && overallSummary) {
-          // Clear existing results and only use the summary
-          results.length = 0;
-          results.push({
-            path: "PROJECT_SUMMARY",
-            content: `--- Project Summary ---\n${overallSummary}`
-          });
-        }
-      }
+      let hasSummary = queryContext.hasSummary;
+      let overallSummary = queryContext.overallSummary;
       
       console.log(pc.bold(pc.cyan('Debug Info:')));
-      console.log(`Found ${blockResults.length} document(s) with ${blockResults.reduce((count, doc) => count + doc.blocks.length, 0)} relevant blocks`);
+      console.log(`Found ${queryContext.results.length} document(s) with ${queryContext.results.reduce((count: number, doc: { path: string; content: string }) => 
+        count + (doc.content.match(/---/g) || []).length, 0)} relevant blocks`);
       
-      if (blockResults.length > 0) {
+      if (queryContext.results.length > 0) {
         // Tree-like representation of search results
         console.log('\nDocument tree:');
         
@@ -133,9 +167,9 @@ export const queryCommand = new Command('query')
         interface DirectoryNode extends Map<string, DirectoryNode | FileNode> {}
         
         const projectStructure = new Map<string, DirectoryNode | FileNode>();
-        blockResults.forEach(doc => {
+        queryContext.results.forEach(doc => {
           // Split the document path to get directories and filename
-          const pathParts = doc.document.split('/');
+          const pathParts = doc.path.split('/');
           const fileName = pathParts.pop() || '';
           
           // Build the tree structure
@@ -150,8 +184,14 @@ export const queryCommand = new Command('query')
           // Add file with block info
           currentLevel.set(fileName, {
             isFile: true,
-            blocks: doc.blocks,
-            count: doc.blocks.length
+            blocks: doc.content.split('\n').map(line => ({
+              type: line.includes('---') ? line.split('---')[1].trim() : '',
+              title: line.includes('---') ? line.split('---')[2].trim() : '',
+              startLine: 0,
+              endLine: 0,
+              content: line.trim()
+            })),
+            count: doc.content.split('\n').length
           });
         });
         
@@ -203,9 +243,6 @@ export const queryCommand = new Command('query')
       }
 
       try {
-        // Get LLM service
-        const llmService = await LLMServiceFactory.getLLMService();
-        
         console.log(pc.bold(pc.cyan('Answer:')));
         
         // Setup for streaming response
@@ -222,6 +259,17 @@ export const queryCommand = new Command('query')
         let spinnerIdx = 0;
         
         if (!useStreaming) {
+          // Show info about no results or summary
+          if (queryContext.results.length === 0) {
+            if (hasSummary) {
+              console.log(pc.cyan('ℹ️ Using project summary as context (no specific code blocks found).'));
+            } else {
+              console.log(pc.yellow('⚠️ No relevant documents found in the project to answer your question.'));
+              console.log(pc.dim('Try reindexing the project with:'));
+              console.log(pc.cyan('  adist reindex -s'));
+            }
+          }
+          
           // Start loading spinner
           process.stdout.write(pc.cyan(`${spinnerFrames[0]} Generating...`));
           spinnerInterval = setInterval(() => {
@@ -236,58 +284,72 @@ export const queryCommand = new Command('query')
         
         // Get AI response with streaming
         const response = await llmService.queryProject(
-          question, 
-          results, 
+          question,
+          queryContext.results,
           currentProjectId,
-          // Stream callback
-          (chunk) => {
-            // Skip streaming output if streaming is not enabled
-            if (!useStreaming) return;
-            
-            if (!startedStreaming) {
-              startedStreaming = true;
-            }
-            
-            // Try to detect code blocks and their language
-            const isFirstChunk = responseBuffer === '';
-            let detectedLanguage = null;
-            
-            // Check for code blocks with language indicators
-            if (isFirstChunk && chunk.includes('```') && !chunk.includes('```\n```')) {
-              if (chunk.includes('```go') || 
-                  (chunk.includes('```') && (
-                    chunk.includes('func ') || 
-                    chunk.includes('type ') || 
-                    chunk.includes('package ')
-                  ))) {
-                detectedLanguage = 'go';
-              } else if (chunk.includes('```javascript') || 
-                        chunk.includes('```typescript') ||
-                        (chunk.includes('```') && (
-                          chunk.includes('function ') || 
-                          chunk.includes('const ') || 
-                          chunk.includes('let ')
-                        ))) {
-                detectedLanguage = 'javascript';
-              } else if (chunk.includes('```python') ||
-                        (chunk.includes('```') && (
-                          chunk.includes('def ') || 
-                          chunk.includes('class ')
-                        ))) {
-                detectedLanguage = 'python';
+          async (chunk) => {
+            try {
+              // Skip streaming output if streaming is not enabled
+              if (!useStreaming) return;
+              
+              if (!startedStreaming) {
+                startedStreaming = true;
+                
+                // Show info about no results or summary on first chunk
+                if (queryContext.results.length === 0) {
+                  if (hasSummary) {
+                    console.log(pc.cyan('ℹ️ Using project summary as context (no specific code blocks found).'));
+                  } else {
+                    console.log(pc.yellow('⚠️ No relevant documents found in the project to answer your question.'));
+                    console.log(pc.dim('Try reindexing the project with:'));
+                    console.log(pc.cyan('  adist reindex -s'));
+                  }
+                }
               }
+              
+              // Try to detect code blocks and their language
+              const isFirstChunk = responseBuffer === '';
+              let detectedLanguage = null;
+              
+              // Check for code blocks with language indicators
+              if (isFirstChunk && chunk.includes('```') && !chunk.includes('```\n```')) {
+                if (chunk.includes('```go') || 
+                    (chunk.includes('```') && (
+                      chunk.includes('func ') || 
+                      chunk.includes('type ') || 
+                      chunk.includes('package ')
+                    ))) {
+                  detectedLanguage = 'go';
+                } else if (chunk.includes('```javascript') || 
+                          chunk.includes('```typescript') ||
+                          (chunk.includes('```') && (
+                            chunk.includes('function ') || 
+                            chunk.includes('const ') || 
+                            chunk.includes('let ')
+                          ))) {
+                  detectedLanguage = 'javascript';
+                } else if (chunk.includes('```python') ||
+                          (chunk.includes('```') && (
+                            chunk.includes('def ') || 
+                            chunk.includes('class ')
+                          ))) {
+                  detectedLanguage = 'python';
+                }
+              }
+              
+              // Process the chunk with syntax highlighting for code blocks
+              const { processedChunk, updatedBuffer, updatedInCodeBlock } = 
+                processStreamingChunk(chunk, responseBuffer, inCodeBlock);
+              
+              // Update state for next chunk
+              responseBuffer = updatedBuffer;
+              inCodeBlock = updatedInCodeBlock;
+              
+              // Write the processed chunk to stdout directly
+              process.stdout.write(processedChunk);
+            } catch (error) {
+              console.error(pc.yellow('Warning: Error processing streaming chunk:'), error);
             }
-            
-            // Process the chunk with syntax highlighting for code blocks
-            const { processedChunk, updatedBuffer, updatedInCodeBlock } = 
-              processStreamingChunk(chunk, responseBuffer, inCodeBlock);
-            
-            // Update state for next chunk
-            responseBuffer = updatedBuffer;
-            inCodeBlock = updatedInCodeBlock;
-            
-            // Write the processed chunk to stdout directly
-            process.stdout.write(processedChunk);
           }
         );
         
@@ -330,10 +392,31 @@ export const queryCommand = new Command('query')
         }
         
         console.log(pc.dim(`\nEstimated cost: $${response.cost.toFixed(4)}${contextInfo}${complexityInfo}`));
-      } catch (llmError) {
-        console.error(pc.bold(pc.red('✘ LLM Error:')), llmError instanceof Error ? llmError.message : String(llmError));
-        console.log(pc.yellow('To configure an LLM provider, run "adist llm-config"'));
-        process.exit(1);
+      } catch (error) {
+        console.error(pc.red('Error getting AI response:'), error);
+        console.log(pc.yellow('Retrying with simplified context...'));
+        
+        // Retry with just the project summary if available
+        if (queryContext.overallSummary) {
+          try {
+            const response = await llmService.queryProject(
+              question,
+              [{
+                path: "PROJECT_SUMMARY",
+                content: `--- Project Summary ---\n${queryContext.overallSummary}`
+              }],
+              currentProjectId
+            );
+            // ... handle successful retry ...
+          } catch (retryError) {
+            console.error(pc.red('Error in retry attempt:'), retryError);
+            console.log(pc.yellow('Please try again or use a simpler query.'));
+            process.exit(1);
+          }
+        } else {
+          console.log(pc.yellow('Please try again or use a simpler query.'));
+          process.exit(1);
+        }
       }
 
       process.exit(0);

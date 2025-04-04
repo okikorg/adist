@@ -13,6 +13,9 @@ export interface BlockIndexOptions {
   includePatterns?: string[];
   excludePatterns?: string[];
   verbose?: boolean;
+  extractKeywords?: boolean;
+  maxParallelism?: number;
+  cacheBlocks?: boolean;
 }
 
 /**
@@ -41,11 +44,11 @@ export class BlockIndexer {
       }
 
       // Check if an LLM provider is available when summarization is requested
-      if (options.withSummaries) {
+      if (options.withSummaries || options.extractKeywords) {
         try {
           // This will throw if no LLM provider is available
           await LLMServiceFactory.getLLMService();
-          if (options.verbose) console.log(pc.dim('LLM service successfully loaded for summarization.'));
+          if (options.verbose) console.log(pc.dim('LLM service successfully loaded for summarization and keyword extraction.'));
         } catch (error) {
           console.error(pc.red('LLM service failed to load:'), error);
           throw new Error('No LLM provider available. Please configure an LLM provider using "adist llm-config"');
@@ -54,7 +57,7 @@ export class BlockIndexer {
 
       // Set up default include/exclude patterns
       const includePatterns = options.includePatterns || [
-        '**/*.{js,jsx,ts,tsx,md,markdown,json,yaml,yml,toml}'
+        '**/*.{js,jsx,ts,tsx,md,markdown,json,yaml,yml,toml,py,java,c,cpp,h,hpp,cs,go,rs,php,rb,html,css,scss,less}'
       ];
       
       const excludePatterns = options.excludePatterns || [
@@ -63,7 +66,9 @@ export class BlockIndexer {
         '**/build/**',
         '**/.git/**',
         '**/coverage/**',
-        '**/*.min.*'
+        '**/*.min.*',
+        '**/package-lock.json',
+        '**/yarn.lock'
       ];
 
       // Get all files matching the patterns
@@ -92,16 +97,16 @@ export class BlockIndexer {
 
       // Index all documents
       const indexedDocuments: IndexedDocument[] = [];
+      const fileErrors: {path: string, error: string}[] = [];
 
       // Get the LLM service if summarization is requested
-      const llmService = options.withSummaries ? await LLMServiceFactory.getLLMService() : null;
+      const llmService = (options.withSummaries || options.extractKeywords) ? 
+        await LLMServiceFactory.getLLMService() : null;
       const fileSummaries: { path: string; summary: string }[] = [];
+      const fileKeywords: { path: string; keywords: string[] }[] = [];
 
-      if (options.withSummaries && llmService && options.verbose) {
-        console.log(pc.dim('LLM service configured for summarization. Will summarize files.'));
-      }
-
-      for (const file of files) {
+      // Function to process a single file
+      const processFile = async (file: string): Promise<IndexedDocument | null> => {
         let document: IndexedDocument | null = null;
         try {
           const content = await fs.readFile(file, 'utf-8');
@@ -118,7 +123,6 @@ export class BlockIndexer {
           if (options.withSummaries && llmService && document) {
             try {
               if (options.verbose) console.log(pc.dim(`Generating summary for ${relativePath}...`));
-              // First generate a file-level summary
               const result = await llmService.summarizeFile(content, relativePath);
               if (options.verbose) console.log(pc.dim(`Summary generated: ${result.summary.substring(0, 50)}...`));
               const summary = result.summary;
@@ -154,6 +158,28 @@ export class BlockIndexer {
             }
           }
 
+          // Extract keywords if requested and document exists
+          if (options.extractKeywords && llmService && document) {
+            try {
+              if (options.verbose) console.log(pc.dim(`Extracting keywords for ${relativePath}...`));
+              const keywords = await this.extractKeywords(llmService, content, relativePath);
+              if (options.verbose) console.log(pc.dim(`Keywords extracted: ${keywords.join(', ')}`));
+              fileKeywords.push({ path: relativePath, keywords });
+              
+              // Find the document-level block and add the keywords as tags
+              for (const block of document.blocks) {
+                if (block.type === 'document') {
+                  block.metadata = block.metadata || {};
+                  block.metadata.tags = keywords;
+                  break;
+                }
+              }
+            } catch (error) {
+              console.error(pc.red(`Error extracting keywords for ${relativePath}:`), error);
+            }
+          }
+
+          return document;
         } catch (error: any) {
           const relativePath = path.relative(project.path, file);
           if (error.message?.includes('Could not find the language') && error.message?.includes('mermaid')) {
@@ -190,20 +216,47 @@ export class BlockIndexer {
               }
             };
           } else {
+            fileErrors.push({
+              path: relativePath,
+              error: error.message || 'Unknown error'
+            });
             console.error(pc.red(`Error processing file ${relativePath}:`), error);
           }
-          progressBar.increment(1, { file: 'Error: ' + relativePath });
-          continue;
+          return document;
         }
+      };
 
-        if (document) {
-          indexedDocuments.push(document);
-        }
+      // Process files in batches to control concurrency
+      const maxParallelism = options.maxParallelism || 5; // Default to 5 files at a time
+      const batchSize = maxParallelism;
+      
+      for (let i = 0; i < files.length; i += batchSize) {
+        const batch = files.slice(i, i + batchSize);
+        const batchResults = await Promise.all(batch.map(async (file) => {
+          const result = await processFile(file);
+          progressBar.increment(1, { file: path.relative(project.path, file) });
+          return result;
+        }));
         
-        progressBar.increment(1, { file: path.relative(project.path, file) });
+        // Add successful results to indexedDocuments
+        for (const result of batchResults) {
+          if (result) {
+            indexedDocuments.push(result);
+          }
+        }
       }
 
       progressBar.stop();
+
+      // Log any errors
+      if (fileErrors.length > 0) {
+        console.log(pc.yellow(`⚠️ Encountered errors in ${fileErrors.length} files during indexing.`));
+        if (options.verbose) {
+          fileErrors.forEach(err => {
+            console.log(pc.dim(`  ${err.path}: ${err.error}`));
+          });
+        }
+      }
 
       // Generate overall summary if requested
       if (options.withSummaries && llmService && fileSummaries.length > 0) {
@@ -216,6 +269,32 @@ export class BlockIndexer {
         } catch (error) {
           console.error(pc.red('Error generating overall summary:'), error);
         }
+      }
+
+      // Generate project-wide keyword index if requested
+      if (options.extractKeywords && fileKeywords.length > 0) {
+        if (options.verbose) console.log(pc.dim(`Generating project-wide keyword index from ${fileKeywords.length} files...`));
+        try {
+          // Create keyword to file mapping for fast search
+          const keywordIndex: Record<string, string[]> = {};
+          for (const fileData of fileKeywords) {
+            for (const keyword of fileData.keywords) {
+              keywordIndex[keyword] = keywordIndex[keyword] || [];
+              keywordIndex[keyword].push(fileData.path);
+            }
+          }
+          await config.set(`keywords.${projectId}`, keywordIndex);
+          if (options.verbose) console.log(pc.green('✓ Project keyword index saved'));
+        } catch (error) {
+          console.error(pc.red('Error generating keyword index:'), error);
+        }
+      }
+
+      // Generate code relationships graph if available
+      try {
+        await this.generateCodeRelationshipsGraph(projectId, indexedDocuments, options);
+      } catch (error) {
+        console.error(pc.yellow('Warning: Failed to generate code relationships graph:'), error);
       }
 
       // Store the indexed documents
@@ -232,6 +311,117 @@ export class BlockIndexer {
     } catch (error) {
       console.error(pc.red('Error indexing project:'), error);
       throw error;
+    }
+  }
+
+  /**
+   * Extract keywords from a file using LLM
+   */
+  private async extractKeywords(llmService: any, content: string, filename: string): Promise<string[]> {
+    // Truncate content if too large
+    const truncatedContent = content.length > 10000 ? content.substring(0, 10000) + '...' : content;
+    
+    try {
+      const response = await llmService.extractKeywords(truncatedContent, filename);
+      return response.keywords || [];
+    } catch (error) {
+      console.error(`Error extracting keywords from ${filename}:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Generate a graph of code relationships between files
+   */
+  private async generateCodeRelationshipsGraph(
+    projectId: string, 
+    documents: IndexedDocument[],
+    options: BlockIndexOptions
+  ): Promise<void> {
+    if (options.verbose) console.log(pc.dim('Generating code relationships graph...'));
+    
+    const relationships: {source: string; target: string; type: string}[] = [];
+    
+    // Create a map for faster document lookup
+    const documentsMap = new Map<string, IndexedDocument>();
+    for (const doc of documents) {
+      documentsMap.set(doc.path, doc);
+    }
+    
+    for (const document of documents) {
+      // Look for imports
+      const importBlocks = document.blocks.filter(block => 
+        block.type === 'imports' || 
+        (block.metadata?.dependencies && block.metadata.dependencies.length > 0)
+      );
+      
+      for (const block of importBlocks) {
+        const dependencies = block.metadata?.dependencies || [];
+        for (const dep of dependencies) {
+          // Try to resolve the dependency to a project file
+          const resolvedPath = this.resolveImportPath(document.path, dep);
+          if (resolvedPath && documentsMap.has(resolvedPath)) {
+            relationships.push({
+              source: document.path,
+              target: resolvedPath,
+              type: 'imports'
+            });
+          }
+        }
+      }
+    }
+    
+    if (relationships.length > 0) {
+      await config.set(`relationships.${projectId}`, relationships);
+      if (options.verbose) console.log(pc.green(`✓ Generated ${relationships.length} code relationships`));
+    } else {
+      if (options.verbose) console.log(pc.yellow('No code relationships found'));
+    }
+  }
+  
+  /**
+   * Resolves a relative import path to an absolute project path
+   */
+  private resolveImportPath(sourcePath: string, importPath: string): string | null {
+    try {
+      // If it looks like a node_modules import, skip it
+      if (
+        importPath.startsWith('@') || 
+        !importPath.startsWith('.') ||
+        importPath.includes('node_modules')
+      ) {
+        return null;
+      }
+      
+      // Remove any query parameters or path fragments
+      importPath = importPath.split('?')[0].split('#')[0];
+      
+      const sourceDir = path.dirname(sourcePath);
+      let normalized = path.normalize(path.join(sourceDir, importPath));
+      
+      // Try with different extensions if none specified
+      if (!path.extname(normalized)) {
+        const exts = ['.js', '.jsx', '.ts', '.tsx', '.md', '.json'];
+        for (const ext of exts) {
+          const withExt = normalized + ext;
+          if (withExt) {
+            return withExt;
+          }
+        }
+        
+        // Also check for index files
+        for (const ext of exts) {
+          const indexFile = path.join(normalized, `index${ext}`);
+          if (indexFile) {
+            return indexFile;
+          }
+        }
+      }
+      
+      return normalized;
+    } catch (error) {
+      console.error('Error resolving import path:', error);
+      return null;
     }
   }
 
@@ -290,6 +480,7 @@ export class BlockSearchEngine {
     // Normalize query
     const normalizedQuery = query.toLowerCase();
     const queryTerms = this.getQueryTerms(normalizedQuery);
+    const queryVector = this.vectorizeTerms(queryTerms);
     
     const results: SearchResult[] = [];
 
@@ -301,6 +492,15 @@ export class BlockSearchEngine {
       normalizedQuery.includes('what is this') ||
       normalizedQuery.includes('what does this do');
 
+    // Check if this is a code-specific query
+    const isCodeQuery = 
+      normalizedQuery.includes('function') || 
+      normalizedQuery.includes('class') || 
+      normalizedQuery.includes('method') ||
+      normalizedQuery.includes('implementation') ||
+      normalizedQuery.includes('interface') ||
+      normalizedQuery.includes('type');
+
     // Search in each document
     for (const document of documents) {
       // Build a map of blocks by id for fast lookup
@@ -309,13 +509,23 @@ export class BlockSearchEngine {
         blocksById.set(block.id, block);
       }
       
-      // Score each block
+      // Score each block using TF-IDF like approach
       const scoredBlocks = document.blocks.map(block => {
-        let score = this.scoreBlock(block, queryTerms);
+        let score = this.scoreBlockWithVector(block, queryTerms, queryVector);
         
-        // Prioritize document blocks with summaries when asking for summaries
+        // Adjust scores for special query types
         if (isSummaryQuery && block.type === 'document' && block.summary) {
-          score += 5; // Boost score for document blocks with summaries
+          score += 10; // Heavily boost document blocks with summaries for summary queries
+        }
+        
+        if (isCodeQuery && (
+          block.type === 'function' || 
+          block.type === 'method' || 
+          block.type === 'class' || 
+          block.type === 'interface' ||
+          block.type === 'type'
+        )) {
+          score += 5; // Boost code blocks for code queries
         }
         
         return { block, score };
@@ -360,6 +570,26 @@ export class BlockSearchEngine {
               }
             }
             
+            // Add sibling blocks for context when appropriate
+            if (block.parent && ['function', 'method', 'class'].includes(block.type)) {
+              const parent = blocksById.get(block.parent);
+              if (parent && parent.children) {
+                const siblings = parent.children
+                  .filter(id => id !== block.id)
+                  .map(id => blocksById.get(id))
+                  .filter((b): b is DocumentBlock => b !== undefined)
+                  .filter(b => ['function', 'method', 'variable'].includes(b.type))
+                  .slice(0, 3); // Limit to 3 siblings for context
+                
+                siblings.forEach(sibling => {
+                  if (!addedIds.has(sibling.id)) {
+                    relevantBlocks.push(sibling);
+                    addedIds.add(sibling.id);
+                  }
+                });
+              }
+            }
+            
             // Add immediate child blocks for context
             if (block.children) {
               block.children.forEach(childId => {
@@ -387,38 +617,36 @@ export class BlockSearchEngine {
     // Take top results
     return results.slice(0, 5);
   }
-  
+
   /**
-   * Score a block based on how well it matches the query
+   * Score a block using vector-based approach
    */
-  private scoreBlock(block: DocumentBlock, queryTerms: string[]): number {
+  private scoreBlockWithVector(block: DocumentBlock, queryTerms: string[], queryVector: Map<string, number>): number {
     const content = block.content.toLowerCase();
     const title = (block.title || '').toLowerCase();
     let score = 0;
     
-    // Higher score for blocks matching in title
+    // Create a term frequency vector for the block content
+    const blockVector = this.createTermFrequencyVector(content);
+    
+    // Add terms from title with higher weight
     for (const term of queryTerms) {
-      // Match in title is very relevant
       if (title.includes(term)) {
-        score += 5;
+        blockVector.set(term, (blockVector.get(term) || 0) + 5);
         
         // Exact title match is even better
         if (title === term) {
-          score += 10;
+          blockVector.set(term, (blockVector.get(term) || 0) + 10);
         }
       }
-      
-      // Match in content
-      if (content.includes(term)) {
-        score += 1;
-        
-        // Count frequency (but with diminishing returns)
-        const termCount = (content.match(new RegExp(term, 'g')) || []).length;
-        score += Math.min(termCount / 5, 1);
-      }
-      
-      // Match in metadata (if available)
-      if (block.metadata) {
+    }
+    
+    // Calculate cosine similarity between query vector and block vector
+    score = this.calculateCosineSimilarity(queryVector, blockVector);
+    
+    // Add metadata-based score
+    if (block.metadata) {
+      for (const term of queryTerms) {
         // Match in name field (function name, class name, etc)
         if (block.metadata.name && block.metadata.name.toLowerCase().includes(term)) {
           score += 3;
@@ -428,26 +656,98 @@ export class BlockSearchEngine {
         if (block.metadata.signature && block.metadata.signature.toLowerCase().includes(term)) {
           score += 2;
         }
+        
+        // Match in tags
+        if (block.metadata.tags && block.metadata.tags.some(tag => tag.toLowerCase().includes(term))) {
+          score += 2;
+        }
       }
     }
     
-    // Adjust score based on block type
-    // Code blocks are more relevant in a code search
+    // Adjust score based on block type to favor more specific blocks
     if (
       block.type === 'function' || 
       block.type === 'method' || 
       block.type === 'class' || 
       block.type === 'interface'
     ) {
+      score *= 1.5;
+    } else if (block.type === 'heading') {
       score *= 1.2;
-    }
-    
-    // Headings are more relevant in documentation searches
-    if (block.type === 'heading') {
-      score *= 1.1;
+    } else if (block.type === 'document') {
+      score *= 0.8; // Slightly reduce document-level blocks unless they have summaries
     }
     
     return score;
+  }
+  
+  /**
+   * Create a term frequency vector for content
+   */
+  private createTermFrequencyVector(content: string): Map<string, number> {
+    const vector = new Map<string, number>();
+    const terms = this.getTermsFromContent(content);
+    
+    for (const term of terms) {
+      vector.set(term, (vector.get(term) || 0) + 1);
+    }
+    
+    return vector;
+  }
+  
+  /**
+   * Calculate cosine similarity between two vectors
+   */
+  private calculateCosineSimilarity(vecA: Map<string, number>, vecB: Map<string, number>): number {
+    let dotProduct = 0;
+    let magnitudeA = 0;
+    let magnitudeB = 0;
+    
+    // Calculate dot product
+    for (const [term, weight] of vecA.entries()) {
+      if (vecB.has(term)) {
+        dotProduct += weight * (vecB.get(term) || 0);
+      }
+      magnitudeA += weight * weight;
+    }
+    
+    // Calculate magnitude of vector B
+    for (const [, weight] of vecB.entries()) {
+      magnitudeB += weight * weight;
+    }
+    
+    // Calculate cosine similarity
+    const magnitude = Math.sqrt(magnitudeA) * Math.sqrt(magnitudeB);
+    return magnitude === 0 ? 0 : dotProduct / magnitude;
+  }
+  
+  /**
+   * Vectorize query terms
+   */
+  private vectorizeTerms(terms: string[]): Map<string, number> {
+    const vector = new Map<string, number>();
+    
+    for (const term of terms) {
+      vector.set(term, (vector.get(term) || 0) + 1);
+    }
+    
+    return vector;
+  }
+  
+  /**
+   * Extract terms from the content for vectorization
+   */
+  private getTermsFromContent(content: string): string[] {
+    const commonWords = new Set([
+      'and', 'or', 'the', 'is', 'a', 'an', 'in', 'to', 'of', 'for', 'on', 'with', 'by', 'as',
+      'this', 'that', 'these', 'those', 'it', 'they', 'we', 'you', 'he', 'she'
+    ]);
+    
+    return content
+      .toLowerCase()
+      .split(/\W+/)
+      .filter(term => term.length > 2)
+      .filter(term => !commonWords.has(term));
   }
   
   /**
@@ -455,11 +755,14 @@ export class BlockSearchEngine {
    */
   private getQueryTerms(query: string): string[] {
     // Split query into terms, filtering out common words and short terms
-    const commonWords = ['and', 'or', 'the', 'is', 'a', 'an', 'in', 'to', 'of', 'for'];
+    const commonWords = new Set([
+      'and', 'or', 'the', 'is', 'a', 'an', 'in', 'to', 'of', 'for', 'on', 'with', 'by', 'as',
+      'this', 'that', 'these', 'those', 'it', 'they', 'we', 'you', 'he', 'she'
+    ]);
     
     return query
-      .split(/\s+/)
+      .split(/\W+/)
       .filter(term => term.length > 2)
-      .filter(term => !commonWords.includes(term));
+      .filter(term => !commonWords.has(term));
   }
 } 

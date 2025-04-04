@@ -116,6 +116,7 @@ export type BlockType =
   'heading' |             // A markdown heading section
   'paragraph' |           // A paragraph of text
   'list' |                // A list in markdown
+  'listItem' |            // An item within a list
   'codeblock' |           // A code block in markdown
   'table' |               // A table in markdown
   

@@ -4,3 +4,15 @@ dist/
 *.log
 .vscode/
 .idea/ 
+
+
+# Environment variables
+.env
+
+# python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz

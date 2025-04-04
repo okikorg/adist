@@ -2,7 +2,7 @@ import { unified } from 'unified';
 import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';
 import { visit } from 'unist-util-visit';
-import { Parent, Root, Heading, Paragraph, List, Code, Table, BlockContent } from 'mdast';
+import { Parent, Root, Heading, Paragraph, List, Code, Table, BlockContent, ListItem } from 'mdast';
 import { v4 as uuidv4 } from 'uuid';
 import { BlockHierarchy, BlockMetadata, BlockType, DocumentBlock, IndexedDocument } from '../../types.js';
 import { Parser, getDocumentTitle } from './base-parser.js';
@@ -10,6 +10,7 @@ import { Parser, getDocumentTitle } from './base-parser.js';
 // Extended metadata for markdown-specific properties
 interface MarkdownBlockMetadata extends BlockMetadata {
   ordered?: boolean; // For lists
+  checked?: boolean; // For task list items
 }
 
 /**
@@ -31,11 +32,11 @@ export class MarkdownParser implements Parser {
       blockMap: {},
     };
     
-    // Create the root block
+    // Create the root block - only include minimal metadata, not the entire content
     const rootBlock: DocumentBlock = {
       id: uuidv4(),
       type: 'document',
-      content,
+      content: '', // Will be populated with a document summary if available
       startLine: 1,
       endLine: content.split('\n').length,
       path: filePath,
@@ -62,17 +63,37 @@ export class MarkdownParser implements Parser {
     // Track headings with their levels and line numbers for content extraction
     const headings: { id: string; level: number; startLine: number; endLine: number }[] = [];
 
+    // Keep track of processed nodes to avoid duplication
+    const processedNodes = new Set<any>();
+    
+    // Keep track of processed line numbers to detect duplicate content
+    const processedLines = new Set<number>();
+    
     // Process the AST
     visit(ast, (node, index, parent) => {
-      if (!parent) {
+      if (!parent || processedNodes.has(node)) {
         return;
       }
-
-      // Calculate line numbers
+      
       const startLine = this.getStartLine(node);
       const endLine = this.getEndLine(node);
       
       if (!startLine || !endLine) {
+        return;
+      }
+      
+      // Skip processing nodes whose lines have already been processed by other nodes
+      // This helps avoid duplication between lists, list items, and paragraphs
+      let allLinesProcessed = true;
+      for (let i = startLine; i <= endLine; i++) {
+        if (!processedLines.has(i)) {
+          allLinesProcessed = false;
+          break;
+        }
+      }
+      
+      if (allLinesProcessed && node.type !== 'heading') {
+        processedNodes.add(node);
         return;
       }
 
@@ -92,12 +113,11 @@ export class MarkdownParser implements Parser {
           }
         }
         
-        // Create block with just the heading line initially
-        // We'll update the content later to include the content under this heading
+        // Create block with just the heading text, not all content under it
         block = {
           id: uuidv4(),
           type: 'heading',
-          content: this.extractContent(content, startLine, endLine, true),
+          content: this.extractContent(content, startLine, endLine),
           startLine,
           endLine,
           path: filePath,
@@ -144,9 +164,40 @@ export class MarkdownParser implements Parser {
           // Push this heading to the stack
           headingStack.push(block);
         }
+        
+        // Mark these lines as processed
+        for (let i = startLine; i <= endLine; i++) {
+          processedLines.add(i);
+        }
       } else if (node.type === 'paragraph') {
-        const paragraph = node as Paragraph;
-        const text = this.getTextFromNode(paragraph);
+        // Skip paragraphs inside list items
+        if (parent.type === 'listItem') {
+          // Mark paragraph as processed, but don't create a block for it
+          processedNodes.add(node);
+          
+          // Mark these lines as processed
+          for (let i = startLine; i <= endLine; i++) {
+            processedLines.add(i);
+          }
+          
+          return;
+        }
+        
+        // Skip paragraphs that look like list items
+        const text = this.getTextFromNode(node as Paragraph);
+        const isListLike = /^\d+\.\s+/.test(text) || /^[-*+]\s+/.test(text);
+        
+        if (isListLike) {
+          // This paragraph appears to be part of a list, so skip it
+          processedNodes.add(node);
+          
+          // Mark these lines as processed
+          for (let i = startLine; i <= endLine; i++) {
+            processedLines.add(i);
+          }
+          
+          return;
+        }
         
         block = {
           id: uuidv4(),
@@ -171,9 +222,15 @@ export class MarkdownParser implements Parser {
             children: [],
           };
         }
+        
+        // Mark these lines as processed
+        for (let i = startLine; i <= endLine; i++) {
+          processedLines.add(i);
+        }
       } else if (node.type === 'list') {
         const list = node as List;
         
+        // Process the list as a whole
         block = {
           id: uuidv4(),
           type: 'list',
@@ -181,7 +238,9 @@ export class MarkdownParser implements Parser {
           startLine,
           endLine,
           path: filePath,
+          title: list.ordered ? "Ordered List" : "Unordered List",
           parent: headingStack[headingStack.length - 1].id,
+          children: [],
           metadata: {
             ordered: list.ordered === null ? undefined : list.ordered,
             spread: list.spread === null ? undefined : list.spread,
@@ -199,6 +258,96 @@ export class MarkdownParser implements Parser {
             block: block.id,
             children: [],
           };
+          
+          // Process list items
+          if (list.children) {
+            for (const item of list.children) {
+              if (item.type === 'listItem') {
+                processedNodes.add(item);
+                
+                const listItem = item as ListItem;
+                const itemStartLine = this.getStartLine(listItem);
+                const itemEndLine = this.getEndLine(listItem);
+                
+                if (!itemStartLine || !itemEndLine) continue;
+                
+                // Mark these lines as processed
+                for (let i = itemStartLine; i <= itemEndLine; i++) {
+                  processedLines.add(i);
+                }
+                
+                // Extract content and text for list item
+                const itemContent = this.extractContent(content, itemStartLine, itemEndLine);
+                
+                // Get text from the first paragraph or use the first line
+                let itemText = '';
+                if (listItem.children && listItem.children.length > 0) {
+                  const firstChild = listItem.children[0];
+                  if (firstChild.type === 'paragraph') {
+                    // Mark paragraph as processed
+                    processedNodes.add(firstChild);
+                    itemText = this.getTextFromNode(firstChild);
+                    
+                    // Mark paragraph lines as processed
+                    const paragraphStartLine = this.getStartLine(firstChild);
+                    const paragraphEndLine = this.getEndLine(firstChild);
+                    if (paragraphStartLine && paragraphEndLine) {
+                      for (let i = paragraphStartLine; i <= paragraphEndLine; i++) {
+                        processedLines.add(i);
+                      }
+                    }
+                  }
+                }
+                
+                if (!itemText) {
+                  const lines = itemContent.split('\n');
+                  itemText = lines[0].trim().replace(/^\d+\.\s+/, '').replace(/^[-*+]\s+/, '');
+                }
+                
+                // Create list item block
+                const listItemBlock: DocumentBlock = {
+                  id: uuidv4(),
+                  type: 'listItem' as BlockType,
+                  content: itemContent,
+                  startLine: itemStartLine,
+                  endLine: itemEndLine,
+                  path: filePath,
+                  title: itemText.length > 50 ? itemText.substring(0, 50) + '...' : itemText,
+                  parent: block.id,
+                  children: [],
+                  metadata: {
+                    checked: 'checked' in listItem ? (listItem.checked === null ? undefined : listItem.checked) : undefined
+                  }
+                };
+                
+                // Add to list
+                block.children = block.children || [];
+                block.children.push(listItemBlock.id);
+                
+                // Update block map
+                blockHierarchy.blockMap[listItemBlock.id] = {
+                  block: listItemBlock.id,
+                  children: [],
+                };
+                
+                blocks.push(listItemBlock);
+                
+                // Process nested lists if any
+                if (listItem.children) {
+                  for (const child of listItem.children) {
+                    if (child.type === 'list') {
+                      this.processNestedList(child as List, listItemBlock, blocks, blockHierarchy, content, filePath, processedNodes, processedLines);
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        
+        // Mark all list lines as processed
+        for (let i = startLine; i <= endLine; i++) {
+          processedLines.add(i);
         }
       } else if (node.type === 'code') {
         const code = node as Code;
@@ -228,6 +377,11 @@ export class MarkdownParser implements Parser {
             children: [],
           };
         }
+        
+        // Mark these lines as processed
+        for (let i = startLine; i <= endLine; i++) {
+          processedLines.add(i);
+        }
       } else if (node.type === 'table') {
         const table = node as Table;
         
@@ -253,25 +407,23 @@ export class MarkdownParser implements Parser {
             children: [],
           };
         }
+        
+        // Mark these lines as processed
+        for (let i = startLine; i <= endLine; i++) {
+          processedLines.add(i);
+        }
       }
 
       if (block) {
         blocks.push(block);
+        processedNodes.add(node);
       }
     });
 
-    // After processing all nodes, update heading blocks with their content
-    for (const heading of headings) {
-      const block = blocks.find(b => b.id === heading.id);
-      if (block) {
-        // Extract content from the heading line (startLine) to the end of the section (endLine)
-        const lines = content.split('\n');
-        if (heading.startLine <= heading.endLine && heading.startLine <= lines.length) {
-          // Include the complete section content
-          block.content = lines.slice(heading.startLine - 1, heading.endLine).join('\n');
-        }
-      }
-    }
+    // Update the root block with the first few lines as content
+    const lines = content.split('\n');
+    rootBlock.content = lines.slice(0, Math.min(5, lines.length)).join('\n') + 
+                       (lines.length > 5 ? '\n...' : '');
 
     return {
       path: filePath,
@@ -282,6 +434,145 @@ export class MarkdownParser implements Parser {
       language: 'markdown',
       blockHierarchy,
     };
+  }
+
+  /**
+   * Process a nested list recursively
+   */
+  private processNestedList(
+    list: List, 
+    parentBlock: DocumentBlock, 
+    blocks: DocumentBlock[],
+    blockHierarchy: BlockHierarchy,
+    content: string,
+    filePath: string,
+    processedNodes: Set<any>,
+    processedLines: Set<number>
+  ): void {
+    processedNodes.add(list);
+    
+    const startLine = this.getStartLine(list);
+    const endLine = this.getEndLine(list);
+    
+    if (!startLine || !endLine) return;
+    
+    // Mark lines as processed
+    for (let i = startLine; i <= endLine; i++) {
+      processedLines.add(i);
+    }
+    
+    // Create nested list block
+    const nestedListBlock: DocumentBlock = {
+      id: uuidv4(),
+      type: 'list',
+      content: this.extractContent(content, startLine, endLine),
+      startLine,
+      endLine,
+      path: filePath,
+      title: list.ordered ? "Ordered List" : "Unordered List",
+      parent: parentBlock.id,
+      children: [],
+      metadata: {
+        ordered: list.ordered === null ? undefined : list.ordered,
+        spread: list.spread === null ? undefined : list.spread,
+      },
+    };
+    
+    // Add to parent
+    parentBlock.children = parentBlock.children || [];
+    parentBlock.children.push(nestedListBlock.id);
+    
+    // Update block map
+    blockHierarchy.blockMap[nestedListBlock.id] = {
+      block: nestedListBlock.id,
+      children: [],
+    };
+    
+    blocks.push(nestedListBlock);
+    
+    // Process list items for this nested list
+    if (list.children && list.children.length > 0) {
+      for (const listItemNode of list.children) {
+        if (listItemNode.type !== 'listItem') continue;
+        
+        processedNodes.add(listItemNode);
+        
+        const listItem = listItemNode as ListItem;
+        const itemStartLine = this.getStartLine(listItem);
+        const itemEndLine = this.getEndLine(listItem);
+        
+        if (!itemStartLine || !itemEndLine) continue;
+        
+        // Mark lines as processed
+        for (let i = itemStartLine; i <= itemEndLine; i++) {
+          processedLines.add(i);
+        }
+        
+        // Prepare item content and text
+        const itemContent = this.extractContent(content, itemStartLine, itemEndLine);
+        
+        // Extract text for the title
+        let itemText = '';
+        if (listItem.children && listItem.children.length > 0) {
+          const firstChild = listItem.children[0];
+          if (firstChild.type === 'paragraph') {
+            processedNodes.add(firstChild);
+            itemText = this.getTextFromNode(firstChild);
+            
+            // Mark paragraph lines as processed
+            const paragraphStartLine = this.getStartLine(firstChild);
+            const paragraphEndLine = this.getEndLine(firstChild);
+            if (paragraphStartLine && paragraphEndLine) {
+              for (let i = paragraphStartLine; i <= paragraphEndLine; i++) {
+                processedLines.add(i);
+              }
+            }
+          } else {
+            // Fallback to first line
+            const lines = itemContent.split('\n');
+            itemText = lines[0].trim().replace(/^\d+\.\s+/, '').replace(/^[-*+]\s+/, '');
+          }
+        }
+        
+        // Create list item block
+        const listItemBlock: DocumentBlock = {
+          id: uuidv4(),
+          type: 'listItem' as BlockType,
+          content: itemContent,
+          startLine: itemStartLine,
+          endLine: itemEndLine,
+          path: filePath,
+          title: itemText.length > 50 ? itemText.substring(0, 50) + '...' : itemText,
+          parent: nestedListBlock.id,
+          children: [],
+          metadata: {
+            checked: 'checked' in listItem ? (listItem.checked === null ? undefined : listItem.checked) : undefined
+          }
+        };
+        
+        // Add to parent list
+        nestedListBlock.children = nestedListBlock.children || [];
+        nestedListBlock.children.push(listItemBlock.id);
+        
+        // Update block map
+        blockHierarchy.blockMap[listItemBlock.id] = {
+          block: listItemBlock.id,
+          children: [],
+        };
+        
+        blocks.push(listItemBlock);
+        
+        // Handle further nested lists if any
+        if (listItem.children) {
+          for (const child of listItem.children) {
+            if (child.type === 'list') {
+              // Process nested list recursively
+              this.processNestedList(child as List, listItemBlock, blocks, blockHierarchy, content, filePath, processedNodes, processedLines);
+            }
+          }
+        }
+      }
+    }
   }
 
   /**

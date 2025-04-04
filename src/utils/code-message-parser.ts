@@ -1,4 +1,4 @@
-import { highlightCode, terminalHighlightCode } from './code-highlighter.js';
+import { highlightCode, terminalHighlightCode, directHighlight } from './code-highlighter.js';
 import pc from 'picocolors';
 
 /**
@@ -86,12 +86,14 @@ export function parseMessageWithMarkdownHighlighting(message: string): string {
  * @param chunk Current text chunk
  * @param buffer Accumulated text buffer
  * @param inCodeBlock Whether we're currently inside a code block
+ * @param detectedLanguage The detected language for code highlighting
  * @returns Processed chunk and updated state
  */
 export function processStreamingChunk(
   chunk: string, 
   buffer: string, 
-  inCodeBlock: boolean
+  inCodeBlock: boolean,
+  detectedLanguage?: string | null
 ): { 
   processedChunk: string, 
   updatedBuffer: string, 
@@ -118,8 +120,8 @@ export function processStreamingChunk(
     if (lastCodeBlockMatch) {
       const [fullMatch, language, code] = lastCodeBlockMatch;
       
-      // Detect language from first line if not specified in the opening backticks
-      let effectiveLanguage = language;
+      // Use detected language if available, otherwise try to detect from content
+      let effectiveLanguage = detectedLanguage || language;
       if (!effectiveLanguage && code.trim()) {
         // Check first line for common language patterns
         const firstLine = code.split('\n')[0].trim();
@@ -177,11 +179,25 @@ export function processStreamingChunk(
   
   // Handle partial code blocks during streaming
   if (updatedInCodeBlock) {
-    // Inside a code block, just preserve the content for later processing
+    // Inside a code block, try to highlight the current chunk if possible
+    const lines = processedChunk.split('\n');
+    const highlightedLines = lines.map(line => {
+      // Skip empty lines
+      if (!line.trim()) return line;
+      
+      // Try to highlight the line using our direct highlighter
+      try {
+        return directHighlight(line, detectedLanguage || undefined);
+      } catch (error) {
+        return line;
+      }
+    });
+    
+    // Return the highlighted chunk while preserving the code block state
     return {
-      processedChunk,
+      processedChunk: highlightedLines.join('\n'),
       updatedBuffer,
-      updatedInCodeBlock
+      updatedInCodeBlock: true
     };
   }
   

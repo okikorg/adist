@@ -123,6 +123,30 @@ This will:
 3. Generate summaries for each file
 4. Create an overall project summary
 
+### Inspect File Structure
+
+```bash
+adist inspect-file <file-path>
+```
+
+Visualize how a file is parsed into blocks and what metadata is extracted during indexing. This command displays block IDs, line ranges, and content previews by default.
+
+Options:
+- `-v, --verbose`: Show detailed block metadata
+- `-t, --tree`: Display block structure as a hierarchical tree
+- `-c, --content`: Show full block content (instead of just previews)
+
+```bash
+# Show file blocks as a tree structure
+adist inspect-file src/app.js -t
+
+# Show detailed block metadata
+adist inspect-file src/app.js -v
+
+# Show full block content
+adist inspect-file src/app.js -c
+```
+
 ### View Summaries
 
 ```bash
@@ -285,6 +309,8 @@ The latest version of adist uses block-based indexing by default, which:
 2. Indexes each block individually with its metadata
 3. Allows for more precise searching and better context understanding
 4. Improves AI interactions by providing more relevant code snippets
+
+You can see how files are parsed into blocks using the `inspect-file` command.
 
 The previous full-document indexing method is still available as `legacy-reindex` and `legacy-get` commands.
 

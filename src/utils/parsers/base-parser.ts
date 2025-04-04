@@ -1,36 +1,50 @@
+import * as path from 'path';
 import { DocumentBlock, IndexedDocument } from '../../types.js';
 
 /**
- * Base interface for all parser implementations
+ * Base interface for document parsers
  */
 export interface Parser {
   /**
-   * Detect if this parser can handle the given file
-   * @param filePath Path to the file
-   * @param content File content
+   * Checks if this parser can handle a specific file
+   * @param filePath The path to the file
+   * @param content The file content (optional)
+   * @returns true if this parser can handle the file
    */
-  canParse(filePath: string, content: string): boolean;
+  canParse(filePath: string, content?: string): boolean;
   
   /**
-   * Parse the file content into a tree of blocks
-   * @param filePath Path to the file
-   * @param content File content
-   * @param stats File stats (for metadata)
-   * @returns Parsed document with blocks
+   * Parse a file into a document
+   * @param filePath The path to the file
+   * @param content The file content
+   * @param stats The file stats (size, modified date)
+   * @returns The parsed document
    */
   parse(
-    filePath: string, 
-    content: string, 
+    filePath: string,
+    content: string,
     stats: { size: number; mtime: Date }
   ): Promise<IndexedDocument>;
 }
 
 /**
- * Utility function to get the document title from the path
+ * Get a document title from its path
  */
 export function getDocumentTitle(filePath: string): string {
-  const parts = filePath.split('/');
-  return parts[parts.length - 1];
+  const basename = path.basename(filePath);
+  return basename;
+}
+
+/**
+ * Document block metadata types
+ */
+export interface BlockMetadata {
+  name?: string;
+  signature?: string;
+  dependencies?: string[];
+  src?: string;
+  type?: string;
+  level?: number;
 }
 
 /**

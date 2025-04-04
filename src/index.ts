@@ -32,6 +32,7 @@ async function main() {
     const { pathsCommand } = await import('./commands/paths.js');
     const { blockReindexCommand } = await import('./commands/block-reindex.js');
     const { blockGetCommand } = await import('./commands/block-get.js');
+    const { inspectFileCommand } = await import('./commands/inspect-file.js');
 
     // Import command handlers
     const init = async (projectName: string) => {
@@ -114,6 +115,9 @@ async function main() {
 
     // Show storage locations
     program.addCommand(pathsCommand);
+
+    // File inspection command
+    program.addCommand(inspectFileCommand);
 
     // Remove index by project name
     program
