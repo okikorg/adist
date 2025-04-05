@@ -6,6 +6,27 @@ import { DocumentBlock } from '../types.js';
 import config from '../config.js';
 
 /**
+ * Get terminal width with fallback for environments where process.stdout is not available
+ */
+function getTerminalWidth(): number {
+  try {
+    // Get terminal width or default to 80 if not available
+    return process.stdout.columns || 80;
+  } catch (e) {
+    return 80; // Fallback width
+  }
+}
+
+/**
+ * Calculate line width for content based on terminal size
+ */
+function getContentLineWidth(): number {
+  const termWidth = getTerminalWidth();
+  // Leave some margin for the vertical bars and indentation
+  return Math.max(termWidth - 10, 60);
+}
+
+/**
  * Command for searching with the block-based indexer
  */
 export const blockGetCommand = new Command('block-get')
@@ -20,16 +41,27 @@ export const blockGetCommand = new Command('block-get')
       const maxResults = options.maxResults ? parseInt(String(options.maxResults), 10) : 10;
       const limitLines = options.limitLines ? parseInt(String(options.limitLines), 10) : 20;
 
-      console.log(pc.cyan(`🔍 Searching for blocks matching: ${pc.bold(query)}`));
+      // Get line width based on terminal size
+      const lineWidth = getContentLineWidth();
+      const borderWidth = lineWidth + 4; // Adding some space for borders
+
+      // Create a nice header
+      console.log();
+      console.log(pc.bold(pc.bgCyan(pc.black(' ADIST SEARCH '))));
+      console.log(pc.cyan('─'.repeat(borderWidth)));
+      console.log(`${pc.bold('Query:')} ${pc.yellow(query)}`);
 
       // Show what kind of search is being performed
       if (query.includes(' AND ')) {
         const terms = query.split(' AND ').map(term => term.trim());
-        console.log(pc.cyan(`📋 Using advanced AND search with ${terms.length} terms`));
+        console.log(`${pc.bold('Search type:')} ${pc.magenta('Advanced AND')} (${terms.length} terms)`);
       } else if (query.includes(' OR ')) {
         const terms = query.split(' OR ').map(term => term.trim());
-        console.log(pc.cyan(`📋 Using advanced OR search with ${terms.length} terms`));
+        console.log(`${pc.bold('Search type:')} ${pc.magenta('Advanced OR')} (${terms.length} terms)`);
+      } else {
+        console.log(`${pc.bold('Search type:')} ${pc.magenta('Simple')}`);
       }
+      console.log(pc.cyan('─'.repeat(borderWidth)));
 
       const searchEngine = new BlockSearchEngine();
       const results = await searchEngine.searchBlocks(query);
@@ -47,7 +79,7 @@ export const blockGetCommand = new Command('block-get')
         // Check if the project has a summary available
         const currentProjectId = await config.get('currentProject') as string;
         if (!currentProjectId) {
-          console.log(pc.yellow('No matching blocks found.'));
+          console.log(pc.yellow('\n⚠ No matching blocks found.'));
           process.exit(0);
         }
         
@@ -78,7 +110,7 @@ export const blockGetCommand = new Command('block-get')
               .filter(Boolean);
             
             if (filesWithSummaries && filesWithSummaries.length > 0) {
-              console.log(pc.yellow('No specific blocks matching your query were found.'));
+              console.log(pc.yellow('\n⚠ No specific blocks matching your query were found.'));
               console.log(pc.cyan('However, file summaries are available:'));
               console.log();
               
@@ -86,7 +118,25 @@ export const blockGetCommand = new Command('block-get')
               const filesToShow = filesWithSummaries.slice(0, 3);
               filesToShow.forEach((file: any) => {
                 console.log(pc.bold(pc.cyan(`${file.path}:`)));
-                console.log(file.summary);
+                console.log(pc.dim('┌' + '─'.repeat(borderWidth - 2) + '┐'));
+                
+                // Break summary text to fit width
+                const summaryLines = file.summary.split('\n');
+                for (const line of summaryLines) {
+                  if (line.length <= lineWidth) {
+                    console.log(pc.dim('│') + ` ${line}`.padEnd(borderWidth - 2) + pc.dim('│'));
+                  } else {
+                    // Handle line wrapping for long lines
+                    let remainingText = line;
+                    while (remainingText.length > 0) {
+                      const chunk = remainingText.slice(0, lineWidth);
+                      console.log(pc.dim('│') + ` ${chunk}`.padEnd(borderWidth - 2) + pc.dim('│'));
+                      remainingText = remainingText.slice(lineWidth);
+                    }
+                  }
+                }
+                
+                console.log(pc.dim('└' + '─'.repeat(borderWidth - 2) + '┘'));
                 console.log();
               });
               
@@ -103,24 +153,44 @@ export const blockGetCommand = new Command('block-get')
           const overallSummary = await config.get(`summaries.${currentProjectId}.overall`) as string | undefined;
           
           if (overallSummary) {
-            console.log(pc.yellow('No specific code blocks matching your query were found.'));
+            console.log(pc.yellow('\n⚠ No specific code blocks matching your query were found.'));
             console.log(pc.cyan('However, a project summary is available:'));
-            console.log('\n' + overallSummary + '\n');
-            console.log(pc.dim('For more specific results, try another search query or use:'));
+            console.log(pc.dim('┌' + '─'.repeat(borderWidth - 2) + '┐'));
+            
+            // Break summary into lines that fit width
+            const summaryLines = overallSummary.split('\n');
+            for (const line of summaryLines) {
+              if (line.length <= lineWidth) {
+                console.log(pc.dim('│') + ` ${line}`.padEnd(borderWidth - 2) + pc.dim('│'));
+              } else {
+                // Handle line wrapping for long lines
+                let remainingText = line;
+                while (remainingText.length > 0) {
+                  const chunk = remainingText.slice(0, lineWidth);
+                  console.log(pc.dim('│') + ` ${chunk}`.padEnd(borderWidth - 2) + pc.dim('│'));
+                  remainingText = remainingText.slice(lineWidth);
+                }
+              }
+            }
+            
+            console.log(pc.dim('└' + '─'.repeat(borderWidth - 2) + '┘'));
+            console.log(pc.dim('\nFor more specific results, try another search query or use:'));
             console.log(pc.cyan('  adist summary --list'));
             process.exit(0);
           }
         }
         
-        console.log(pc.yellow('No matching blocks found.'));
+        console.log(pc.yellow('\n⚠ No matching blocks found.'));
         process.exit(0);
       }
 
       // Display the results
-      console.log(pc.green(`Found ${results.length} document${results.length > 1 ? 's' : ''} with matching blocks:`));
+      console.log(pc.bold(pc.green(`\n✓ SEARCH RESULTS`)) + pc.gray(` (${results.length} documents with matching blocks)`));
       
-      for (const result of results.slice(0, maxResults)) {
-        console.log(pc.bold(pc.blue(`\nFile: ${result.document}`)));
+      for (let i = 0; i < Math.min(results.length, maxResults); i++) {
+        const result = results[i];
+        // Show result number with better styling
+        console.log(`\n${pc.bold(pc.bgBlue(` RESULT #${i+1} `))} ${pc.bold(pc.blue(`${result.document}`))}`);
         
         // Check if there's a document block with a summary
         const documentBlock = result.blocks.find(block => 
@@ -128,7 +198,28 @@ export const blockGetCommand = new Command('block-get')
         );
         
         if (documentBlock && 'summary' in documentBlock && documentBlock.summary) {
-          console.log(pc.cyan(`  Summary: ${documentBlock.summary}`));
+          console.log(pc.cyan(`  ┌${'─'.repeat(borderWidth - 4)}`));
+          console.log(pc.cyan(`  │ ${pc.bold('SUMMARY')}`));
+          
+          // Format summary text with proper wrapping based on terminal width
+          const summaryLines = documentBlock.summary.split('\n');
+          
+          for (const line of summaryLines) {
+            // Handle long lines by breaking them into chunks
+            if (line.length <= lineWidth) {
+              console.log(pc.cyan(`  │ `) + line);
+            } else {
+              // Break long lines into multiple lines
+              let remainingText = line;
+              while (remainingText.length > 0) {
+                const chunk = remainingText.slice(0, lineWidth);
+                console.log(pc.cyan(`  │ `) + chunk);
+                remainingText = remainingText.slice(lineWidth);
+              }
+            }
+          }
+          
+          console.log(pc.cyan(`  └${'─'.repeat(borderWidth - 4)}`));
         }
         
         // Sort blocks by line number
@@ -140,15 +231,15 @@ export const blockGetCommand = new Command('block-get')
             continue;
           }
           
-          console.log(pc.yellow(`  Block: ${block.type} (${block.startLine}-${block.endLine})`));
+          console.log(pc.yellow(`  │ ${pc.bold(block.type.toUpperCase())} (lines ${block.startLine}-${block.endLine})`));
           if (block.title) {
-            console.log(pc.bold(`  Title: ${block.title}`));
+            console.log(pc.yellow(`  │ ${pc.bold('Title:')} ${pc.dim(block.title)}`));
           }
           
           // Limit content to specified number of lines
           const lines = block.content.split('\n');
           const displayLines = lines.length > limitLines 
-            ? [...lines.slice(0, limitLines), `... (${lines.length - limitLines} more lines)`]
+            ? [...lines.slice(0, limitLines), pc.dim(`... (${lines.length - limitLines} more lines)`)]
             : lines;
           
           // Determine language for syntax highlighting
@@ -168,26 +259,76 @@ export const blockGetCommand = new Command('block-get')
             language = 'markdown';
           }
           
-          // Display content with syntax highlighting
+          // Display content with syntax highlighting - use indentation and vertical bar instead of box
           if (displayLines.length > 0) {
-            console.log(pc.dim('  Content:'));
+            console.log(pc.yellow(`  │ ${pc.bold('Content:')}`));
+            console.log(pc.yellow(`  ┌${'─'.repeat(borderWidth - 4)}`));
+            
             const content = displayLines.join('\n');
             
             if (language) {
-              console.log(highlight(content, { language, ignoreIllegals: true }));
+              // Add vertical bar with indent to each line of highlighted content
+              const highlightedContent = highlight(content, { language, ignoreIllegals: true });
+              const contentLines = highlightedContent.split('\n');
+              
+              for (const line of contentLines) {
+                if (line.length <= lineWidth) {
+                  console.log(pc.dim(`  │ `) + line);
+                } else {
+                  // Break long lines if needed
+                  let remainingText = line;
+                  let isFirstChunk = true;
+                  
+                  while (remainingText.length > 0) {
+                    const chunk = remainingText.slice(0, lineWidth);
+                    console.log(pc.dim(`  │ `) + (isFirstChunk ? '' : '  ') + chunk);
+                    remainingText = remainingText.slice(lineWidth);
+                    isFirstChunk = false;
+                  }
+                }
+              }
             } else {
-              console.log(content);
+              // Add vertical bar with indent to each line of non-highlighted content
+              const contentLines = content.split('\n');
+              
+              for (const line of contentLines) {
+                if (line.length <= lineWidth) {
+                  console.log(pc.dim(`  │ `) + line);
+                } else {
+                  // Break long lines if needed
+                  let remainingText = line;
+                  let isFirstChunk = true;
+                  
+                  while (remainingText.length > 0) {
+                    const chunk = remainingText.slice(0, lineWidth);
+                    console.log(pc.dim(`  │ `) + (isFirstChunk ? '' : '  ') + chunk);
+                    remainingText = remainingText.slice(lineWidth);
+                    isFirstChunk = false;
+                  }
+                }
+              }
             }
+            console.log(pc.dim(`  └${'─'.repeat(borderWidth - 4)}`));
           }
           
-          console.log(); // Empty line for separation
+          // Add separator between blocks
+          if (sortedBlocks.indexOf(block) < sortedBlocks.length - 1) {
+            console.log(pc.dim(`  ├${'─'.repeat(borderWidth - 4)}`));
+          }
+        }
+        
+        // Add separator between results
+        if (i < Math.min(results.length, maxResults) - 1) {
+          console.log(pc.dim(`──${'─'.repeat(borderWidth - 2)}`));
         }
       }
       
       if (results.length > maxResults) {
-        console.log(pc.dim(`\nShowing ${maxResults} out of ${results.length} results. Use --max-results to show more.`));
+        console.log(pc.dim(`\n! Showing ${maxResults} out of ${results.length} results. Use ${pc.bold('--max-results')} to show more.`));
       }
 
+      console.log(pc.cyan('\n' + '─'.repeat(borderWidth)));
+      console.log(pc.dim(`Search completed in adist`));
       process.exit(0);
     } catch (error) {
       console.error(pc.bold(pc.red('✘ Error searching blocks:')), error instanceof Error ? error.message : String(error));

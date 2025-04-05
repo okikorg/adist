@@ -55,6 +55,10 @@ export const getCommand = new Command('get')
         process.exit(1);
       }
 
+      // Create a nice header with ASCII art instead of emojis
+      console.log();
+      console.log(pc.bold(pc.bgCyan(pc.black(' ADIST SEARCH '))));
+      console.log(pc.cyan('─'.repeat(50)));
       console.log(`${pc.bold('Project:')} ${pc.cyan(project.name)}`);
       console.log(`${pc.bold('Query:')} ${pc.yellow('"' + query + '"')}`);
       
@@ -65,8 +69,11 @@ export const getCommand = new Command('get')
       } else if (query.includes(' OR ')) {
         const terms = query.split(' OR ').map(term => term.trim());
         console.log(`${pc.bold('Search type:')} ${pc.magenta('Advanced OR')} (${terms.length} terms)`);
+      } else {
+        console.log(`${pc.bold('Search type:')} ${pc.magenta('Simple')}`);
       }
-
+      console.log(pc.cyan('─'.repeat(50)));
+      
       // Debug info
       if (options.debug) {
         console.log(pc.dim('Debug info:'));
@@ -78,6 +85,7 @@ export const getCommand = new Command('get')
         } catch (e) {
           console.log(`Indexed files: Error retrieving`);
         }
+        console.log(pc.cyan('─'.repeat(50)));
       }
 
       // Use BlockSearchEngine for searching
@@ -85,31 +93,34 @@ export const getCommand = new Command('get')
       const results = await searchEngine.searchBlocks(query);
       
       if (results.length === 0) {
-        console.log(pc.yellow('⚠ No documents found matching your query.'));
+        console.log(pc.yellow('\n⚠ No documents found matching your query.'));
         process.exit(0);
       }
 
       const maxResults = options.maxResults ? parseInt(options.maxResults, 10) : 10;
       const limitLines = options.limitLines ? parseInt(options.limitLines, 10) : 20;
 
-      console.log(`\n${pc.bold(pc.green('✓ Search Results:'))} ${pc.gray(`(${results.length} matches)`)}`);
+      console.log(`\n${pc.bold(pc.green('✓ SEARCH RESULTS'))} ${pc.gray(`(${results.length} matches)`)}`);
       
-      for (const result of results.slice(0, maxResults)) {
-        console.log(`\n${pc.bold(pc.blue(`File: ${result.document}`))}`);
+      for (let i = 0; i < Math.min(results.length, maxResults); i++) {
+        const result = results[i];
+        // Show result number with ASCII styling
+        console.log(`\n${pc.bold(pc.white(pc.bgBlue(` RESULT #${i+1} `)))}`);
+        console.log(`${pc.bold(pc.blue(`File: ${result.document}`))}`);
         
         // Sort blocks by line number
         const sortedBlocks = [...result.blocks].sort((a, b) => a.startLine - b.startLine);
         
         for (const block of sortedBlocks) {
-          console.log(pc.yellow(`  Block: ${block.type} (${block.startLine}-${block.endLine})`));
+          console.log(`${pc.yellow(`[${pc.bold(block.type.toUpperCase())}] (lines ${block.startLine}-${block.endLine})`)}`);
           if (block.title) {
-            console.log(pc.bold(`  Title: ${block.title}`));
+            console.log(`${pc.bold('Title:')} ${block.title}`);
           }
           
           // Limit content to specified number of lines
           const lines = block.content.split('\n');
           const displayLines = lines.length > limitLines 
-            ? [...lines.slice(0, limitLines), `... (${lines.length - limitLines} more lines)`]
+            ? [...lines.slice(0, limitLines), `${pc.dim(`... (${lines.length - limitLines} more lines)`)}` ]
             : lines;
           
           // Determine language for syntax highlighting
@@ -131,7 +142,9 @@ export const getCommand = new Command('get')
           
           // Display content with syntax highlighting
           if (displayLines.length > 0) {
-            console.log(pc.dim('  Content:'));
+            console.log(`${pc.bold('Content:')}`);
+            console.log(pc.dim('┌' + '─'.repeat(48) + '┐'));
+            
             const content = displayLines.join('\n');
             
             if (language) {
@@ -139,16 +152,21 @@ export const getCommand = new Command('get')
             } else {
               console.log(content);
             }
+            console.log(pc.dim('└' + '─'.repeat(48) + '┘'));
           }
-          
-          console.log(); // Empty line for separation
+        }
+        // Add separator between results
+        if (i < Math.min(results.length, maxResults) - 1) {
+          console.log(pc.dim('·'.repeat(50)));
         }
       }
       
       if (results.length > maxResults) {
-        console.log(pc.dim(`\nShowing ${maxResults} out of ${results.length} results. Use --max-results to show more.`));
+        console.log(pc.dim(`\n! Showing ${maxResults} out of ${results.length} results. Use ${pc.bold('--max-results')} to show more.`));
       }
 
+      console.log(pc.cyan('\n' + '─'.repeat(50)));
+      console.log(pc.dim(`Search completed in adist`));
       process.exit(0);
     } catch (error) {
       console.error(pc.bold(pc.red('✘ Error searching documents:')), error);
