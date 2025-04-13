@@ -27,21 +27,109 @@ function getContentLineWidth(): number {
 }
 
 /**
+ * Format block content with proper indentation and line breaking
+ */
+function formatBlockContent(
+  content: string, 
+  language: string | undefined, 
+  lineWidth: number, 
+  maxLines: number
+): string {
+  // Limit content to specified number of lines
+  const lines = content.split('\n');
+  const displayLines = lines.length > maxLines 
+    ? [...lines.slice(0, maxLines), pc.dim(`... (${lines.length - maxLines} more lines)`)]
+    : lines;
+  
+  const contentText = displayLines.join('\n');
+  
+  // Apply syntax highlighting if language is available
+  if (language) {
+    try {
+      // Highlight and indent each line
+      const highlightedContent = highlight(contentText, { language, ignoreIllegals: true });
+      const contentLines = highlightedContent.split('\n').map(line => {
+        if (line.length <= lineWidth) {
+          return pc.dim(`  │ `) + line;
+        } else {
+          // Break long lines into chunks that fit width
+          const chunks: string[] = [];
+          let remainingText = line;
+          let isFirstChunk = true;
+          
+          while (remainingText.length > 0) {
+            const chunk = remainingText.slice(0, lineWidth);
+            chunks.push(pc.dim(`  │ `) + (isFirstChunk ? '' : '  ') + chunk);
+            remainingText = remainingText.slice(lineWidth);
+            isFirstChunk = false;
+          }
+          
+          return chunks.join('\n');
+        }
+      });
+      
+      return contentLines.join('\n');
+    } catch (error) {
+      // Fallback to non-highlighted if highlighting fails
+      return formatPlainContent(contentText, lineWidth);
+    }
+  } else {
+    return formatPlainContent(contentText, lineWidth);
+  }
+}
+
+/**
+ * Format plain text content without syntax highlighting
+ */
+function formatPlainContent(content: string, lineWidth: number): string {
+  return content.split('\n').map(line => {
+    if (line.length <= lineWidth) {
+      return pc.dim(`  │ `) + line;
+    } else {
+      // Break long lines
+      const chunks: string[] = [];
+      let remainingText = line;
+      let isFirstChunk = true;
+      
+      while (remainingText.length > 0) {
+        const chunk = remainingText.slice(0, lineWidth);
+        chunks.push(pc.dim(`  │ `) + (isFirstChunk ? '' : '  ') + chunk);
+        remainingText = remainingText.slice(lineWidth);
+        isFirstChunk = false;
+      }
+      
+      return chunks.join('\n');
+    }
+  }).join('\n');
+}
+
+/**
  * Command for searching with the block-based indexer
  */
 export const blockGetCommand = new Command('block-get')
   .description('Search for blocks matching a query (default search method for "adist get"). Supports advanced operators:\n' +
                '  - AND: "theme style AND color palette" - finds blocks containing both terms\n' +
                '  - OR: "theme OR style" - finds blocks containing either term\n' +
-               'Use "adist get --detailed" to view enhanced metadata like summaries, metrics, and relationships.')
+               'Output is concise by default. Use --detailed for comprehensive block views.')
   .argument('<query>', 'The search query (use "term1 AND term2" or "term1 OR term2" for advanced searching)')
   .option('-n, --max-results <number>', 'Maximum number of results to show', '10')
   .option('-l, --limit-lines <number>', 'Limit the number of content lines shown per block', '20')
-  .option('-d, --detailed', 'Show detailed metadata including summaries, metrics, and relationships', false)
-  .action(async (query: string, options: { maxResults?: number; limitLines?: number; detailed?: boolean }) => {
+  .option('-d, --detailed', 'Show blocks with detailed formatting, borders, and enhanced metadata', false)
+  .option('--code-only', 'Show only code blocks (functions, methods, classes) in the results', false)
+  .option('-g, --group-by-file', 'Group results by file rather than relevance ranking', false)
+  .action(async (query: string, options: { 
+    maxResults?: number; 
+    limitLines?: number; 
+    detailed?: boolean;
+    codeOnly?: boolean;
+    groupByFile?: boolean;
+  }) => {
     try {
       const maxResults = options.maxResults ? parseInt(String(options.maxResults), 10) : 10;
       const limitLines = options.limitLines ? parseInt(String(options.limitLines), 10) : 20;
+      const isDetailed = !!options.detailed;
+      const codeOnly = !!options.codeOnly;
+      const groupByFile = !!options.groupByFile;
 
       // Get line width based on terminal size
       const lineWidth = getContentLineWidth();
@@ -63,10 +151,23 @@ export const blockGetCommand = new Command('block-get')
       } else {
         console.log(`${pc.bold('Search type:')} ${pc.magenta('Simple')}`);
       }
+      
+      if (codeOnly) {
+        console.log(`${pc.bold('Filter:')} ${pc.yellow('Code blocks only')}`);
+      }
+      
+      if (groupByFile) {
+        console.log(`${pc.bold('Display:')} ${pc.yellow('Grouped by file')}`);
+      }
+      
+      if (isDetailed) {
+        console.log(`${pc.bold('Display:')} ${pc.yellow('Detailed output')}`);
+      }
+      
       console.log(pc.cyan('─'.repeat(borderWidth)));
 
       const searchEngine = new BlockSearchEngine();
-      const results = await searchEngine.searchBlocks(query);
+      let results = await searchEngine.searchBlocks(query);
 
       // Check if the query is about summaries or descriptions
       const isSummaryQuery = 
@@ -190,12 +291,47 @@ export const blockGetCommand = new Command('block-get')
         process.exit(0);
       }
 
+      // Filter for code blocks only if requested
+      if (codeOnly) {
+        const codeBlockTypes = ['function', 'method', 'class', 'interface', 'type'];
+        results = results.map(result => ({
+          ...result,
+          blocks: result.blocks.filter(block => codeBlockTypes.includes(block.type))
+        })).filter(result => result.blocks.length > 0);
+      }
+      
+      // Group results by file if requested
+      if (groupByFile) {
+        const fileMap = new Map<string, { blocks: DocumentBlock[], score: number }>();
+        
+        // Group blocks by file
+        for (const result of results) {
+          if (!fileMap.has(result.document)) {
+            fileMap.set(result.document, { blocks: [], score: result.score });
+          }
+          
+          const fileEntry = fileMap.get(result.document);
+          if (fileEntry) {
+            fileEntry.blocks.push(...result.blocks);
+          }
+        }
+        
+        // Convert back to results array
+        results = Array.from(fileMap.entries()).map(([document, { blocks, score }]) => ({
+          document,
+          blocks,
+          score
+        }));
+      }
+
       // Display the results
-      console.log(pc.bold(pc.green(`\n✓ SEARCH RESULTS`)) + pc.gray(` (${results.length} documents with matching blocks)`));
+      const resultCount = results.reduce((count, r) => count + r.blocks.length, 0);
+      console.log(pc.bold(pc.green(`\n✓ SEARCH RESULTS`)) + pc.gray(` (${resultCount} blocks in ${results.length} files)`));
       
       for (let i = 0; i < Math.min(results.length, maxResults); i++) {
         const result = results[i];
-        // Show result number with better styling
+        
+        // Show file header
         console.log(`\n${pc.bold(pc.bgBlue(` RESULT #${i+1} `))} ${pc.bold(pc.blue(`${result.document}`))}`);
         
         // Check if there's a document block with a summary
@@ -203,7 +339,7 @@ export const blockGetCommand = new Command('block-get')
           block.type === 'document' && 'summary' in block && block.summary
         );
         
-        if (documentBlock && 'summary' in documentBlock && documentBlock.summary) {
+        if (documentBlock && 'summary' in documentBlock && documentBlock.summary && isDetailed) {
           console.log(pc.cyan(`  ┌${'─'.repeat(borderWidth - 4)}`));
           console.log(pc.cyan(`  │ ${pc.bold('SUMMARY')}`));
           
@@ -230,16 +366,37 @@ export const blockGetCommand = new Command('block-get')
         
         // Sort blocks by line number
         const sortedBlocks = [...result.blocks].sort((a, b) => a.startLine - b.startLine);
+        const displayBlocks = sortedBlocks.filter(block => block.type !== 'document' || !('summary' in block));
         
-        for (const block of sortedBlocks) {
-          // Skip document blocks as we already showed the summary
-          if (block.type === 'document' && 'summary' in block) {
-            continue;
-          }
+        // Skip if no blocks to display
+        if (displayBlocks.length === 0) {
+          continue;
+        }
+        
+        // Display blocks section header
+        if (isDetailed) {
+          console.log(pc.cyan(`  ┌${'─'.repeat(borderWidth - 4)}`));
+          console.log(pc.cyan(`  │ ${pc.bold(`BLOCKS (${displayBlocks.length})`)}`));
+        }
+        
+        for (let j = 0; j < displayBlocks.length; j++) {
+          const block = displayBlocks[j];
+          const isLastBlock = j === displayBlocks.length - 1;
           
-          console.log(pc.yellow(`  │ ${pc.bold(block.type.toUpperCase())} (lines ${block.startLine}-${block.endLine})`));
-          if (block.title) {
-            console.log(pc.yellow(`  │ ${pc.bold('Title:')} ${pc.dim(block.title)}`));
+          // Block header
+          if (!isDetailed) {
+            const locationText = `lines ${block.startLine}-${block.endLine}`;
+            const blockTitle = block.title || '';
+            console.log(
+              pc.yellow(`  │ ${pc.bold(block.type.toUpperCase())} `) + 
+              pc.dim(`(${locationText})`) + 
+              (blockTitle ? `: ${pc.bold(blockTitle)}` : '')
+            );
+          } else {
+            console.log(pc.yellow(`  │ ${pc.bold(block.type.toUpperCase())} (lines ${block.startLine}-${block.endLine})`));
+            if (block.title) {
+              console.log(pc.yellow(`  │ ${pc.bold('Title:')} ${pc.dim(block.title)}`));
+            }
           }
           
           // Show enhanced metadata if detailed flag is enabled
@@ -299,7 +456,7 @@ export const blockGetCommand = new Command('block-get')
               
               console.log(pc.yellow(`  │ ${pc.bold('Related:')} ${pc.dim(relatedBlocks.join('; ') + (block.relatedBlockIds.length > 3 ? ' + ' + (block.relatedBlockIds.length - 3) + ' more' : ''))}`));
             }
-          } else {
+          } else if (isDetailed) {
             // In non-detailed mode, just show a concise indicator if enhanced data is available
             const hasEnhancedData = !!(
               block.metadata?.semanticSummary || 
@@ -313,12 +470,6 @@ export const blockGetCommand = new Command('block-get')
               console.log(pc.yellow(`  │ ${pc.dim('Enhanced metadata available, use --detailed to view')}`));
             }
           }
-          
-          // Limit content to specified number of lines
-          const lines = block.content.split('\n');
-          const displayLines = lines.length > limitLines 
-            ? [...lines.slice(0, limitLines), pc.dim(`... (${lines.length - limitLines} more lines)`)]
-            : lines;
           
           // Determine language for syntax highlighting
           let language: string | undefined;
@@ -342,76 +493,48 @@ export const blockGetCommand = new Command('block-get')
             language = undefined;
           }
 
-          // Display content with syntax highlighting - use indentation and vertical bar instead of box
-          if (displayLines.length > 0) {
-            console.log(pc.yellow(`  │ ${pc.bold('Content:')}`));
-            console.log(pc.yellow(`  ┌${'─'.repeat(borderWidth - 4)}`));
-            
-            const content = displayLines.join('\n');
-            
-            if (language) {
-              // Add vertical bar with indent to each line of highlighted content
-              const highlightedContent = highlight(content, { language, ignoreIllegals: true });
-              const contentLines = highlightedContent.split('\n');
-              
-              for (const line of contentLines) {
-                if (line.length <= lineWidth) {
-                  console.log(pc.dim(`  │ `) + line);
-                } else {
-                  // Break long lines if needed
-                  let remainingText = line;
-                  let isFirstChunk = true;
-                  
-                  while (remainingText.length > 0) {
-                    const chunk = remainingText.slice(0, lineWidth);
-                    console.log(pc.dim(`  │ `) + (isFirstChunk ? '' : '  ') + chunk);
-                    remainingText = remainingText.slice(lineWidth);
-                    isFirstChunk = false;
-                  }
-                }
-              }
-            } else {
-              // Add vertical bar with indent to each line of non-highlighted content
-              const contentLines = content.split('\n');
-              
-              for (const line of contentLines) {
-                if (line.length <= lineWidth) {
-                  console.log(pc.dim(`  │ `) + line);
-                } else {
-                  // Break long lines if needed
-                  let remainingText = line;
-                  let isFirstChunk = true;
-                  
-                  while (remainingText.length > 0) {
-                    const chunk = remainingText.slice(0, lineWidth);
-                    console.log(pc.dim(`  │ `) + (isFirstChunk ? '' : '  ') + chunk);
-                    remainingText = remainingText.slice(lineWidth);
-                    isFirstChunk = false;
-                  }
-                }
-              }
+          // Display content with syntax highlighting
+          if (block.content) {
+            if (isDetailed) {
+              console.log(pc.yellow(`  │ ${pc.bold('Content:')}`));
+              console.log(pc.yellow(`  ┌${'─'.repeat(borderWidth - 4)}`));
             }
-            console.log(pc.dim(`  └${'─'.repeat(borderWidth - 4)}`));
+            
+            // Format block content using the helper function
+            const formattedContent = formatBlockContent(block.content, language, lineWidth, limitLines);
+            console.log(formattedContent);
+            
+            if (isDetailed) {
+              console.log(pc.yellow(`  └${'─'.repeat(borderWidth - 4)}`));
+            }
           }
           
-          // Add separator between blocks
-          if (sortedBlocks.indexOf(block) < sortedBlocks.length - 1) {
-            console.log(pc.dim(`  ├${'─'.repeat(borderWidth - 4)}`));
+          // Add separator between blocks if not the last block
+          if (!isLastBlock) {
+            console.log(isDetailed ? pc.dim(`  ├${'─'.repeat(borderWidth - 4)}`) : '');
           }
+        }
+        
+        // Close blocks section
+        if (isDetailed && displayBlocks.length > 0) {
+          console.log(pc.cyan(`  └${'─'.repeat(borderWidth - 4)}`));
         }
         
         // Add separator between results
         if (i < Math.min(results.length, maxResults) - 1) {
-          console.log(pc.dim(`──${'─'.repeat(borderWidth - 2)}`));
+          console.log(pc.dim(`─${'─'.repeat(borderWidth - 1)}`));
         }
       }
       
       if (results.length > maxResults) {
-        console.log(pc.dim(`\n! Showing ${maxResults} out of ${results.length} results. Use ${pc.bold('--max-results')} to show more.`));
+        console.log(pc.dim(`\n! Showing ${maxResults} out of ${results.length} files with matches. Use ${pc.bold('--max-results')} to show more.`));
       }
 
       console.log(pc.cyan('\n' + '─'.repeat(borderWidth)));
-      console.log(pc.dim(`Search completed in adist. Use 'adist get --detailed <query>' to see enhanced block metadata.`));
+      console.log(pc.dim(`Try these options for different views:`));
+      console.log(pc.dim(`  --detailed (-d): Show blocks with comprehensive borders and metadata`));
+      console.log(pc.dim(`  --code-only: Show only code blocks like functions and classes`));
+      console.log(pc.dim(`  --group-by-file (-g): Group results by file rather than relevance`));
       process.exit(0);
     } catch (error) {
       console.error(pc.bold(pc.red('✘ Error searching blocks:')), error instanceof Error ? error.message : String(error));
@@ -422,11 +545,20 @@ export const blockGetCommand = new Command('block-get')
 /**
  * Block get function for programmatic use
  */
-export const blockGet = async (query: string, options?: { maxResults?: number; limitLines?: number; detailed?: boolean }): Promise<void> => {
-  await blockGetCommand.parseAsync([
-    query,
-    ...(options?.maxResults ? ['--max-results', options.maxResults.toString()] : []),
-    ...(options?.limitLines ? ['--limit-lines', options.limitLines.toString()] : []),
-    ...(options?.detailed ? ['--detailed'] : [])
-  ]);
+export const blockGet = async (query: string, options?: { 
+  maxResults?: number; 
+  limitLines?: number; 
+  detailed?: boolean;
+  codeOnly?: boolean;
+  groupByFile?: boolean;
+}): Promise<void> => {
+  const args = [query];
+  
+  if (options?.maxResults) args.push('--max-results', options.maxResults.toString());
+  if (options?.limitLines) args.push('--limit-lines', options.limitLines.toString());
+  if (options?.detailed) args.push('--detailed');
+  if (options?.codeOnly) args.push('--code-only');
+  if (options?.groupByFile) args.push('--group-by-file');
+  
+  await blockGetCommand.parseAsync(args);
 }; 
