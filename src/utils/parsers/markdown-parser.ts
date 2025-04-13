@@ -1,6 +1,7 @@
 import { unified } from 'unified';
 import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';
+import remarkMermaid from 'remark-mermaidjs';
 import { visit } from 'unist-util-visit';
 import { Parent, Root, Heading, Paragraph, List, Code, Table, BlockContent, ListItem } from 'mdast';
 import { v4 as uuidv4 } from 'uuid';
@@ -17,6 +18,15 @@ interface MarkdownBlockMetadata extends BlockMetadata {
  * Parser for Markdown documents
  */
 export class MarkdownParser implements Parser {
+  // Maximum size a block should be (in lines) before considering splitting it
+  private MAX_BLOCK_SIZE = 50;
+  
+  // Minimum size a block should be (in lines) to be considered as a standalone block
+  private MIN_BLOCK_SIZE = 5;
+  
+  // Number of lines to overlap between adjacent blocks
+  private OVERLAP_SIZE = 3;
+
   canParse(filePath: string): boolean {
     return /\.(md|markdown)$/i.test(filePath);
   }
@@ -53,7 +63,8 @@ export class MarkdownParser implements Parser {
     // Parse the markdown document
     const processor = unified()
       .use(remarkParse)
-      .use(remarkGfm);
+      .use(remarkGfm)
+      .use(remarkMermaid);
     
     const ast = await processor.parse(content);
     
@@ -199,6 +210,47 @@ export class MarkdownParser implements Parser {
           return;
         }
         
+        // Check if this block is large and should be split
+        const blockSize = endLine - startLine + 1;
+        if (blockSize > this.MAX_BLOCK_SIZE) {
+          // Create adaptive blocks by splitting large paragraphs
+          const subBlocks = this.createAdaptiveBlocks(
+            content,
+            filePath,
+            startLine,
+            endLine,
+            headingStack[headingStack.length - 1].id,
+            text
+          );
+          
+          // Add the sub-blocks to the document
+          for (const subBlock of subBlocks) {
+            blocks.push(subBlock);
+            
+            // Add to parent
+            const currentParent = headingStack[headingStack.length - 1];
+            if (currentParent) {
+              currentParent.children = currentParent.children || [];
+              currentParent.children.push(subBlock.id);
+              
+              // Update block map
+              blockHierarchy.blockMap[subBlock.id] = {
+                block: subBlock.id,
+                children: [],
+              };
+            }
+          }
+          
+          // Mark these lines as processed
+          for (let i = startLine; i <= endLine; i++) {
+            processedLines.add(i);
+          }
+          
+          // Don't create a single block for the whole paragraph
+          processedNodes.add(node);
+          return;
+        }
+        
         block = {
           id: uuidv4(),
           type: 'paragraph',
@@ -208,6 +260,10 @@ export class MarkdownParser implements Parser {
           path: filePath,
           title: text.length > 50 ? text.substring(0, 50) + '...' : text,
           parent: headingStack[headingStack.length - 1].id,
+          metadata: {
+            // Add semantic metadata
+            semanticSummary: this.generateSimpleSummary(text)
+          }
         };
         
         // Add to parent
@@ -614,5 +670,187 @@ export class MarkdownParser implements Parser {
    */
   private getEndLine(node: any): number | null {
     return node.position?.end?.line || null;
+  }
+
+  /**
+   * Create adaptive blocks by splitting a large text section into smaller, coherent blocks
+   * with overlap between adjacent blocks
+   */
+  private createAdaptiveBlocks(
+    content: string,
+    filePath: string,
+    startLine: number,
+    endLine: number,
+    parentId: string,
+    title: string
+  ): DocumentBlock[] {
+    const blocks: DocumentBlock[] = [];
+    const paragraphContent = this.extractContent(content, startLine, endLine);
+    const lines = paragraphContent.split('\n');
+    
+    // Determine optimal split points
+    // Using sentence boundaries for more coherent blocks
+    const sentences: { text: string, startIdx: number, endIdx: number }[] = [];
+    let currentSentence = '';
+    let lineStart = 0;
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      
+      // If the line ends with a sentence terminator, or is an empty line
+      if (/[.!?]$/.test(line.trim()) || line.trim() === '') {
+        currentSentence += line + '\n';
+        
+        sentences.push({
+          text: currentSentence,
+          startIdx: lineStart,
+          endIdx: i
+        });
+        
+        currentSentence = '';
+        lineStart = i + 1;
+      } else {
+        currentSentence += line + '\n';
+      }
+    }
+    
+    // If there's a remaining sentence
+    if (currentSentence) {
+      sentences.push({
+        text: currentSentence,
+        startIdx: lineStart,
+        endIdx: lines.length - 1
+      });
+    }
+    
+    // Create blocks from sentence groups
+    let currentBlock: { 
+      sentences: { text: string, startIdx: number, endIdx: number }[];
+      startIdx: number;
+      endIdx: number;
+    } = {
+      sentences: [],
+      startIdx: 0,
+      endIdx: 0
+    };
+    
+    const blockGroups: typeof currentBlock[] = [];
+    
+    for (const sentence of sentences) {
+      if (currentBlock.sentences.length === 0) {
+        // Start a new block
+        currentBlock.sentences.push(sentence);
+        currentBlock.startIdx = sentence.startIdx;
+        currentBlock.endIdx = sentence.endIdx;
+      } else {
+        // Check if adding this sentence would make the block too large
+        const potentialSize = sentence.endIdx - currentBlock.startIdx + 1;
+        
+        if (potentialSize > this.MAX_BLOCK_SIZE) {
+          // Finalize current block and start a new one
+          blockGroups.push(currentBlock);
+          currentBlock = {
+            sentences: [sentence],
+            startIdx: sentence.startIdx,
+            endIdx: sentence.endIdx
+          };
+        } else {
+          // Add sentence to current block
+          currentBlock.sentences.push(sentence);
+          currentBlock.endIdx = sentence.endIdx;
+        }
+      }
+    }
+    
+    // Add the last block if not empty
+    if (currentBlock.sentences.length > 0) {
+      blockGroups.push(currentBlock);
+    }
+    
+    // Create DocumentBlock objects from block groups
+    for (let i = 0; i < blockGroups.length; i++) {
+      const group = blockGroups[i];
+      
+      // Calculate actual line numbers in the file
+      const blockStartLine = startLine + group.startIdx;
+      let blockEndLine = startLine + group.endIdx;
+      
+      // Add overlap with previous block
+      let overlapContentStart = '';
+      if (i > 0) {
+        // Get last OVERLAP_SIZE sentences from previous block
+        const prevBlock = blockGroups[i-1];
+        const overlapSentences = prevBlock.sentences.slice(-this.OVERLAP_SIZE);
+        if (overlapSentences.length > 0) {
+          overlapContentStart = overlapSentences.map(s => s.text).join('');
+        }
+      }
+      
+      // Add overlap with next block
+      let overlapContentEnd = '';
+      if (i < blockGroups.length - 1) {
+        // Get first OVERLAP_SIZE sentences from next block
+        const nextBlock = blockGroups[i+1];
+        const overlapSentences = nextBlock.sentences.slice(0, this.OVERLAP_SIZE);
+        if (overlapSentences.length > 0) {
+          overlapContentEnd = overlapSentences.map(s => s.text).join('');
+        }
+      }
+      
+      // Generate content with overlap
+      const mainContent = group.sentences.map(s => s.text).join('');
+      const contentWithOverlap = overlapContentStart + mainContent + overlapContentEnd;
+      
+      // Create the block
+      const block: DocumentBlock = {
+        id: uuidv4(),
+        type: 'paragraph',
+        content: contentWithOverlap,
+        startLine: blockStartLine,
+        endLine: blockEndLine,
+        path: filePath,
+        title: `${title.substring(0, 30)}... (part ${i+1}/${blockGroups.length})`,
+        parent: parentId,
+        metadata: {
+          // Add simple semantic metadata from the content
+          semanticSummary: this.generateSimpleSummary(mainContent)
+        }
+      };
+      
+      // Create relationships between adjacent blocks
+      if (i > 0 || i < blockGroups.length - 1) {
+        block.relatedBlockIds = [];
+        
+        // Link to previous block
+        if (i > 0) {
+          block.relatedBlockIds.push(blocks[blocks.length - 1].id);
+        }
+      }
+      
+      blocks.push(block);
+      
+      // Update relationship for the previous block to link to this one
+      if (i > 0) {
+        const prevBlock = blocks[blocks.length - 2];
+        prevBlock.relatedBlockIds = prevBlock.relatedBlockIds || [];
+        prevBlock.relatedBlockIds.push(block.id);
+      }
+    }
+    
+    return blocks;
+  }
+  
+  /**
+   * Generate a simple summary from the content
+   * In a real implementation, this would call an LLM
+   */
+  private generateSimpleSummary(content: string): string {
+    // Simple extractive summarization - take the first sentence
+    // In a real implementation, this would use more advanced techniques
+    const firstSentence = content.split(/[.!?](\s|$)/)[0];
+    if (firstSentence && firstSentence.length > 5) {
+      return firstSentence.trim();
+    }
+    return '';
   }
 } 

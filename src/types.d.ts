@@ -108,6 +108,7 @@ export interface DocumentBlock {
   children?: string[];    // Child block IDs
   metadata?: BlockMetadata; // Additional metadata based on block type
   summary?: string;       // Optional summary of the block
+  relatedBlockIds?: string[]; // IDs of related blocks (e.g., function calls, definitions)
 }
 
 export type BlockType = 
@@ -145,6 +146,14 @@ export interface BlockMetadata {
   spread?: boolean;       // For spread lists in markdown
   checked?: boolean;      // For checkboxes in markdown
   name?: string;          // Name of the entity (function, class, variable, etc.)
+  
+  // Added enhanced metadata fields
+  semanticSummary?: string; // Short semantic summary of the block's purpose
+  keyPhrases?: string[];   // Key multi-word phrases identified in the block
+  entities?: { type: string; value: string }[]; // Named entities found (e.g., { type: 'PERSON', value: 'John Doe' })
+  codeMetrics?: { cyclomaticComplexity?: number; [key: string]: any }; // Code complexity or other metrics
+  variables?: { defined?: string[]; used?: string[] }; // Variables defined or used within the block
+  apiCalls?: string[];    // Specific APIs or functions called within the block
 }
 
 export interface IndexedDocument {

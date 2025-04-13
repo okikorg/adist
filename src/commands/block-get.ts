@@ -30,13 +30,15 @@ function getContentLineWidth(): number {
  * Command for searching with the block-based indexer
  */
 export const blockGetCommand = new Command('block-get')
-  .description('Search for blocks matching a query (default search method). Supports advanced operators:\n' +
+  .description('Search for blocks matching a query (default search method for "adist get"). Supports advanced operators:\n' +
                '  - AND: "theme style AND color palette" - finds blocks containing both terms\n' +
-               '  - OR: "theme OR style" - finds blocks containing either term')
+               '  - OR: "theme OR style" - finds blocks containing either term\n' +
+               'Use "adist get --detailed" to view enhanced metadata like summaries, metrics, and relationships.')
   .argument('<query>', 'The search query (use "term1 AND term2" or "term1 OR term2" for advanced searching)')
   .option('-n, --max-results <number>', 'Maximum number of results to show', '10')
   .option('-l, --limit-lines <number>', 'Limit the number of content lines shown per block', '20')
-  .action(async (query: string, options: { maxResults?: number; limitLines?: number }) => {
+  .option('-d, --detailed', 'Show detailed metadata including summaries, metrics, and relationships', false)
+  .action(async (query: string, options: { maxResults?: number; limitLines?: number; detailed?: boolean }) => {
     try {
       const maxResults = options.maxResults ? parseInt(String(options.maxResults), 10) : 10;
       const limitLines = options.limitLines ? parseInt(String(options.limitLines), 10) : 20;
@@ -146,6 +148,8 @@ export const blockGetCommand = new Command('block-get')
               
               console.log(pc.dim('To view all file summaries:'));
               console.log(pc.cyan('  adist summary --list'));
+              console.log(pc.dim('Or try a more specific search:'));
+              console.log(pc.cyan('  adist get --detailed "<query>"'));
               process.exit(0);
             }
           }
@@ -175,12 +179,14 @@ export const blockGetCommand = new Command('block-get')
             
             console.log(pc.dim('└' + '─'.repeat(borderWidth - 2) + '┘'));
             console.log(pc.dim('\nFor more specific results, try another search query or use:'));
-            console.log(pc.cyan('  adist summary --list'));
+            console.log(pc.cyan('  adist get --detailed "<query>"'));
             process.exit(0);
           }
         }
         
         console.log(pc.yellow('\n⚠ No matching blocks found.'));
+        console.log(pc.dim('Try a different search query or reindex with enhanced block indexing:'));
+        console.log(pc.cyan('  adist reindex --with-summaries'));
         process.exit(0);
       }
 
@@ -236,6 +242,78 @@ export const blockGetCommand = new Command('block-get')
             console.log(pc.yellow(`  │ ${pc.bold('Title:')} ${pc.dim(block.title)}`));
           }
           
+          // Show enhanced metadata if detailed flag is enabled
+          if (options.detailed) {
+            // Show semantic summary if available
+            if (block.metadata?.semanticSummary) {
+              console.log(pc.yellow(`  │ ${pc.bold('Summary:')} ${pc.dim(block.metadata.semanticSummary)}`));
+            }
+            
+            // Show code metrics for functions, methods, and classes
+            if (block.metadata?.codeMetrics) {
+              const metrics = block.metadata.codeMetrics;
+              let metricsStr = [];
+              
+              if (metrics.cyclomaticComplexity !== undefined) {
+                metricsStr.push(`complexity: ${metrics.cyclomaticComplexity}`);
+              }
+              if (metrics.lines !== undefined) {
+                metricsStr.push(`lines: ${metrics.lines}`);
+              }
+              if (metrics.methods !== undefined) {
+                metricsStr.push(`methods: ${metrics.methods}`);
+              }
+              if (metrics.size !== undefined) {
+                metricsStr.push(`size: ${metrics.size}`);
+              }
+              
+              if (metricsStr.length > 0) {
+                console.log(pc.yellow(`  │ ${pc.bold('Metrics:')} ${pc.dim(metricsStr.join(', '))}`));
+              }
+            }
+            
+            // Show variables and API calls for functions and methods
+            if (['function', 'method'].includes(block.type)) {
+              // Show defined variables
+              if (block.metadata?.variables?.defined?.length) {
+                const vars = block.metadata.variables.defined.slice(0, 5);
+                console.log(pc.yellow(`  │ ${pc.bold('Defines:')} ${pc.dim(vars.join(', ') + (block.metadata.variables.defined.length > 5 ? '...' : ''))}`));
+              }
+              
+              // Show API calls
+              if (block.metadata?.apiCalls?.length) {
+                const calls = block.metadata.apiCalls.slice(0, 5);
+                console.log(pc.yellow(`  │ ${pc.bold('Calls:')} ${pc.dim(calls.join(', ') + (block.metadata.apiCalls.length > 5 ? '...' : ''))}`));
+              }
+            }
+            
+            // Show related blocks
+            if (block.relatedBlockIds && block.relatedBlockIds.length > 0) {
+              // Find related block titles
+              const relatedBlocks = block.relatedBlockIds.map(id => {
+                const related = result.blocks.find(b => b.id === id);
+                return related ? 
+                  `${related.title || related.type} (lines ${related.startLine}-${related.endLine})` : 
+                  'unknown';
+              }).slice(0, 3); // Limit to 3 related blocks to avoid clutter
+              
+              console.log(pc.yellow(`  │ ${pc.bold('Related:')} ${pc.dim(relatedBlocks.join('; ') + (block.relatedBlockIds.length > 3 ? ' + ' + (block.relatedBlockIds.length - 3) + ' more' : ''))}`));
+            }
+          } else {
+            // In non-detailed mode, just show a concise indicator if enhanced data is available
+            const hasEnhancedData = !!(
+              block.metadata?.semanticSummary || 
+              block.metadata?.codeMetrics || 
+              block.metadata?.variables || 
+              block.metadata?.apiCalls || 
+              (block.relatedBlockIds && block.relatedBlockIds.length > 0)
+            );
+            
+            if (hasEnhancedData) {
+              console.log(pc.yellow(`  │ ${pc.dim('Enhanced metadata available, use --detailed to view')}`));
+            }
+          }
+          
           // Limit content to specified number of lines
           const lines = block.content.split('\n');
           const displayLines = lines.length > limitLines 
@@ -259,6 +337,11 @@ export const blockGetCommand = new Command('block-get')
             language = 'markdown';
           }
           
+          // Prevent cli-highlight error for unsupported languages like mermaid
+          if (language === 'mermaid') {
+            language = undefined;
+          }
+
           // Display content with syntax highlighting - use indentation and vertical bar instead of box
           if (displayLines.length > 0) {
             console.log(pc.yellow(`  │ ${pc.bold('Content:')}`));
@@ -328,7 +411,7 @@ export const blockGetCommand = new Command('block-get')
       }
 
       console.log(pc.cyan('\n' + '─'.repeat(borderWidth)));
-      console.log(pc.dim(`Search completed in adist`));
+      console.log(pc.dim(`Search completed in adist. Use 'adist get --detailed <query>' to see enhanced block metadata.`));
       process.exit(0);
     } catch (error) {
       console.error(pc.bold(pc.red('✘ Error searching blocks:')), error instanceof Error ? error.message : String(error));
@@ -339,10 +422,11 @@ export const blockGetCommand = new Command('block-get')
 /**
  * Block get function for programmatic use
  */
-export const blockGet = async (query: string, options?: { maxResults?: number; limitLines?: number }): Promise<void> => {
+export const blockGet = async (query: string, options?: { maxResults?: number; limitLines?: number; detailed?: boolean }): Promise<void> => {
   await blockGetCommand.parseAsync([
     query,
     ...(options?.maxResults ? ['--max-results', options.maxResults.toString()] : []),
-    ...(options?.limitLines ? ['--limit-lines', options.limitLines.toString()] : [])
+    ...(options?.limitLines ? ['--limit-lines', options.limitLines.toString()] : []),
+    ...(options?.detailed ? ['--detailed'] : [])
   ]);
 }; 

@@ -167,6 +167,15 @@ export class CodeParser implements Parser {
     const blockIdMap = new Map<string, DocumentBlock>();
     blocks.forEach(block => blockIdMap.set(block.id, block));
     
+    // Track function definitions to link calls with their definitions
+    const functionDefinitions = new Map<string, string>(); // name -> blockId
+    
+    // Track variable definitions
+    const variableDefinitions = new Map<string, string>(); // name -> blockId
+    
+    // Track relationships between blocks (calling functions, using variables)
+    const relationships = new Map<string, Set<string>>(); // blockId -> Set<relatedBlockId>
+    
     // Function to create a block ID from a node
     const getNodeId = (node: any, type: string): string => {
       const startLine = node.startPosition.row + 1;
@@ -209,9 +218,19 @@ export class CodeParser implements Parser {
             const className = content.substring(classNameNode.startIndex, classNameNode.endIndex);
             blockTitle = `Class: ${className}`;
             metadata.name = className;
+            
+            // Store the class name for relationship tracking
+            functionDefinitions.set(className, ''); // Temporarily store without blockId
           } else {
             blockTitle = 'Class';
           }
+          
+          // Advanced analysis for class complexity
+          metadata.codeMetrics = {
+            size: nodeText.split('\n').length,
+            methods: 0, // Will be incremented as we process children
+            variables: 0 // Will be incremented as we process children
+          };
           break;
         
         case 'interface_declaration':
@@ -229,7 +248,8 @@ export class CodeParser implements Parser {
           break;
         
         case 'function_declaration':
-          blockType = 'function';
+        case 'method_definition':
+          blockType = node.type === 'function_declaration' ? 'function' : 'method';
           
           // Get function name and parameters
           const funcNameNode = node.children.find((c: any) => c.type === 'identifier');
@@ -237,38 +257,127 @@ export class CodeParser implements Parser {
           
           if (funcNameNode) {
             const funcName = content.substring(funcNameNode.startIndex, funcNameNode.endIndex);
-            blockTitle = `Function: ${funcName}`;
+            blockTitle = `${blockType === 'function' ? 'Function' : 'Method'}: ${funcName}`;
             metadata.name = funcName;
             
             if (parameterNode) {
               const params = content.substring(parameterNode.startIndex, parameterNode.endIndex);
               metadata.signature = `${funcName}${params}`;
             }
+            
+            // Store the function name for relationship tracking
+            functionDefinitions.set(funcName, ''); // Temporarily store without blockId
           } else {
-            blockTitle = 'Function';
+            blockTitle = blockType === 'function' ? 'Function' : 'Method';
           }
+          
+          // Advanced analysis of function content
+          const variablesDefined: string[] = [];
+          const variablesUsed: string[] = [];
+          const apiCalls: string[] = [];
+          
+          // Analyze function body for variables and API calls
+          const bodyNode = node.children.find((c: any) => c.type === 'statement_block');
+          if (bodyNode) {
+            // Extract defined variables (variable declarations)
+            const varDeclarations = this.findNodesOfType(bodyNode, 'variable_declaration');
+            varDeclarations.forEach(varNode => {
+              const declaratorNodes = this.findNodesOfType(varNode, 'variable_declarator');
+              declaratorNodes.forEach(declarator => {
+                const identifierNode = this.findNodesOfType(declarator, 'identifier')[0];
+                if (identifierNode) {
+                  const varName = content.substring(identifierNode.startIndex, identifierNode.endIndex);
+                  variablesDefined.push(varName);
+                  variableDefinitions.set(varName, ''); // Temporarily store without blockId
+                }
+              });
+            });
+            
+            // Extract function calls
+            const callExpressions = this.findNodesOfType(bodyNode, 'call_expression');
+            callExpressions.forEach(callNode => {
+              const functionIdNode = this.findNodesOfType(callNode, 'identifier')[0];
+              if (functionIdNode) {
+                const calledFunctionName = content.substring(functionIdNode.startIndex, functionIdNode.endIndex);
+                apiCalls.push(calledFunctionName);
+                variablesUsed.push(calledFunctionName); // Function name is used
+              }
+            });
+            
+            // Extract used variables
+            const identifiers = this.findNodesOfType(bodyNode, 'identifier');
+            identifiers.forEach(idNode => {
+              // Skip if it's a function name or already in defined variables
+              const idName = content.substring(idNode.startIndex, idNode.endIndex);
+              const parentNode = idNode.parent;
+              if (
+                // Skip variable declarations (already handled)
+                !(parentNode.type === 'variable_declarator' && parentNode.children[0].id === idNode.id) &&
+                // Skip function name itself
+                !(parentNode.type === 'function_declaration' && parentNode.children[0].id === idNode.id) &&
+                // Skip method name itself
+                !(parentNode.type === 'method_definition' && parentNode.children[0].id === idNode.id) &&
+                // Skip property accesses (obj.prop - we only want obj)
+                !(parentNode.type === 'property_access' && parentNode.children[1].id === idNode.id)
+              ) {
+                variablesUsed.push(idName);
+              }
+            });
+          }
+          
+          // Add to metadata
+          metadata.variables = {
+            defined: Array.from(new Set(variablesDefined)),
+            used: Array.from(new Set(variablesUsed))
+          };
+          
+          metadata.apiCalls = Array.from(new Set(apiCalls));
+          
+          // Calculate simple cyclomatic complexity by counting decision points
+          const decisionPoints = [
+            ...this.findNodesOfType(node, 'if_statement'),
+            ...this.findNodesOfType(node, 'for_statement'),
+            ...this.findNodesOfType(node, 'while_statement'),
+            ...this.findNodesOfType(node, 'switch_statement'),
+            ...this.findNodesOfType(node, 'conditional_expression')
+          ];
+          
+          metadata.codeMetrics = {
+            cyclomaticComplexity: decisionPoints.length + 1, // Base complexity of 1
+            lines: endLine - startLine + 1
+          };
+          
+          // Generate a simple semantic summary
+          metadata.semanticSummary = this.generateFunctionSummary(
+            metadata.name || '',
+            metadata.variables.defined || [],
+            metadata.apiCalls || []
+          );
           break;
         
-        case 'method_definition':
-          blockType = 'method';
+        case 'variable_declaration':
+          blockType = 'variable';
           
-          // Get method name and parameters
-          const methodNameNode = node.children.find((c: any) => 
-            c.type === 'property_identifier' || c.type === 'identifier'
-          );
-          const methodParamsNode = node.children.find((c: any) => c.type === 'formal_parameters');
+          // Get variable declarations
+          const declarators = this.findNodesOfType(node, 'variable_declarator');
+          const varNames: string[] = [];
           
-          if (methodNameNode) {
-            const methodName = content.substring(methodNameNode.startIndex, methodNameNode.endIndex);
-            blockTitle = `Method: ${methodName}`;
-            metadata.name = methodName;
-            
-            if (methodParamsNode) {
-              const params = content.substring(methodParamsNode.startIndex, methodParamsNode.endIndex);
-              metadata.signature = `${methodName}${params}`;
+          declarators.forEach(declarator => {
+            const nameNode = declarator.children.find((c: any) => c.type === 'identifier');
+            if (nameNode) {
+              const varName = content.substring(nameNode.startIndex, nameNode.endIndex);
+              varNames.push(varName);
+              
+              // Store the variable name for relationship tracking
+              variableDefinitions.set(varName, '');
             }
+          });
+          
+          if (varNames.length > 0) {
+            blockTitle = `Variable: ${varNames.join(', ')}`;
+            metadata.name = varNames.join(', ');
           } else {
-            blockTitle = 'Method';
+            blockTitle = 'Variable';
           }
           break;
         
@@ -300,29 +409,6 @@ export class CodeParser implements Parser {
           if (exportedNames.length > 0) {
             metadata.exports = exportedNames;
             blockTitle = `Export: ${exportedNames.join(', ')}`;
-          }
-          break;
-        
-        case 'lexical_declaration':
-        case 'variable_declaration':
-          blockType = 'variable';
-          
-          // Extract variable name(s)
-          const varNames: string[] = [];
-          const declarators = node.children.filter((c: any) => c.type === 'variable_declarator');
-          
-          declarators.forEach((declarator: any) => {
-            const nameNode = declarator.children.find((c: any) => c.type === 'identifier');
-            if (nameNode) {
-              varNames.push(content.substring(nameNode.startIndex, nameNode.endIndex));
-            }
-          });
-          
-          if (varNames.length > 0) {
-            blockTitle = `Variable: ${varNames.join(', ')}`;
-            metadata.name = varNames.join(', ');
-          } else {
-            blockTitle = 'Variable';
           }
           break;
         
@@ -373,60 +459,171 @@ export class CodeParser implements Parser {
           break;
       }
       
-      // If we recognized this node type, create a block for it
+      // If we identified a block type, create the block
       if (blockType) {
+        // Generate a unique ID for this block
+        const blockId = uuidv4();
+        
         const block: DocumentBlock = {
-          id: uuidv4(),
+          id: blockId,
           type: blockType,
-          content: this.extractContent(content, startLine, endLine),
+          content: nodeText,
           startLine,
           endLine,
           path: filePath,
           title: blockTitle,
           parent: parentId,
           children: [],
-          metadata,
+          metadata
         };
         
-        blocks.push(block);
-        blockIdMap.set(block.id, block);
-        
-        // Add to parent's children
-        const parent = blockIdMap.get(parentId);
-        if (parent) {
-          parent.children = parent.children || [];
-          parent.children.push(block.id);
+        // Update function and variable maps with the block ID
+        if (blockType === 'function' || blockType === 'method' || blockType === 'class') {
+          if (metadata.name) {
+            functionDefinitions.set(metadata.name, blockId);
+          }
+        } else if (blockType === 'variable') {
+          if (metadata.name) {
+            // Handle multiple variable declarations
+            metadata.name.split(', ').forEach((name: string) => {
+              variableDefinitions.set(name.trim(), blockId);
+            });
+          }
         }
         
-        // Update block map
-        blockHierarchy.blockMap[block.id] = {
-          block: block.id,
-          children: [],
-        };
+        // Add the block to our array
+        blocks.push(block);
+        blockIdMap.set(blockId, block);
         
-        // Process children of this node (for classes, interfaces, etc.)
-        if (node.children && (blockType === 'class' || blockType === 'interface')) {
-          node.children.forEach((child: any) => {
-            // Only process certain child types
-            if (['method_definition', 'public_field_definition', 'method_signature'].includes(child.type)) {
-              processNode(child, block.id);
-            }
+        // Add to block hierarchy
+        if (!blockHierarchy.blockMap[blockId]) {
+          blockHierarchy.blockMap[blockId] = {
+            block: blockId,
+            children: [],
+          };
+        }
+        
+        // Add to parent
+        const parentBlock = blockIdMap.get(parentId);
+        if (parentBlock) {
+          if (!parentBlock.children) {
+            parentBlock.children = [];
+          }
+          parentBlock.children.push(blockId);
+          
+          // Update block hierarchy
+          if (blockHierarchy.blockMap[parentId]) {
+            blockHierarchy.blockMap[parentId].children.push(blockId);
+          }
+        }
+        
+        // Process child nodes (recursive)
+        if (node.children) {
+          node.children.forEach((childNode: any) => {
+            processNode(childNode, blockId);
           });
         }
       } else {
-        // If this node isn't a recognized block type, process its children at the same level
+        // This node doesn't become a block, but process its children
         if (node.children) {
-          node.children.forEach((child: any) => {
-            processNode(child, parentId);
+          node.children.forEach((childNode: any) => {
+            processNode(childNode, parentId);
           });
         }
       }
     };
     
-    // Start processing from the root node's children
-    rootNode.children.forEach((child: any) => {
-      processNode(child);
-    });
+    // Start processing from the root
+    if (rootNode.children) {
+      rootNode.children.forEach((childNode: any) => {
+        processNode(childNode);
+      });
+    }
+    
+    // Build relationships between blocks based on function calls and variable usage
+    for (const block of blocks) {
+      if (block.metadata?.apiCalls) {
+        // Link function calls to their definitions
+        for (const functionCall of block.metadata.apiCalls) {
+          const targetBlockId = functionDefinitions.get(functionCall);
+          if (targetBlockId && targetBlockId !== block.id) {
+            // Create a relationship between this block and the called function
+            if (!relationships.has(block.id)) {
+              relationships.set(block.id, new Set());
+            }
+            relationships.get(block.id)!.add(targetBlockId);
+          }
+        }
+      }
+      
+      // Link variable usages to their definitions
+      if (block.metadata?.variables?.used) {
+        for (const varUsed of block.metadata.variables.used) {
+          const targetBlockId = variableDefinitions.get(varUsed);
+          if (targetBlockId && targetBlockId !== block.id) {
+            // Create a relationship between this block and the variable definition
+            if (!relationships.has(block.id)) {
+              relationships.set(block.id, new Set());
+            }
+            relationships.get(block.id)!.add(targetBlockId);
+          }
+        }
+      }
+    }
+    
+    // Apply the relationships to the blocks
+    for (const [blockId, relatedBlockIds] of relationships.entries()) {
+      const block = blockIdMap.get(blockId);
+      if (block) {
+        block.relatedBlockIds = Array.from(relatedBlockIds);
+      }
+    }
+  }
+  
+  /**
+   * Helper function to find nodes of a specific type within a parent node
+   */
+  private findNodesOfType(parentNode: any, type: string): any[] {
+    const result: any[] = [];
+    
+    const traverseNode = (node: any) => {
+      if (node.type === type) {
+        result.push(node);
+      }
+      
+      if (node.children) {
+        node.children.forEach((childNode: any) => traverseNode(childNode));
+      }
+    };
+    
+    traverseNode(parentNode);
+    return result;
+  }
+  
+  /**
+   * Generate a simple semantic summary for a function
+   */
+  private generateFunctionSummary(functionName: string, definedVars: string[], apiCalls: string[]): string {
+    // In a real implementation, this would use an LLM or more sophisticated analysis
+    let summary = `${functionName}`;
+    
+    // Add info about what it does based on variables and API calls
+    if (definedVars.length > 0 || apiCalls.length > 0) {
+      summary += " handles";
+      
+      if (definedVars.length > 0) {
+        summary += ` ${definedVars.slice(0, 3).join(', ')}`;
+        if (definedVars.length > 3) summary += ` and other variables`;
+      }
+      
+      if (apiCalls.length > 0) {
+        if (definedVars.length > 0) summary += " and";
+        summary += ` calls ${apiCalls.slice(0, 3).join(', ')}`;
+        if (apiCalls.length > 3) summary += ` and other functions`;
+      }
+    }
+    
+    return summary;
   }
   
   /**
